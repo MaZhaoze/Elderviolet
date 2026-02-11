@@ -1,128 +1,135 @@
+
 <p align="center">
-  <img src="logo.png" alt="logo" width="300">
+  <img src="logo.png" alt="Elderviolet logo" width="260">
 </p>
 
-# Elderviolet
+<h1 align="center">Elderviolet</h1>
 
-**Elderviolet** is a quiet, strategic chess engine blending ancient wisdom, deep calculation, and relentless positional precision.
+<p align="center">
+  A UCI chess engine written in <b>pure C++</b>.
+  <br>
+  Focused on search strength, clean architecture, and informative UCI output.
+</p>
 
-> *The Elderviolet Dragon*
-> 上古紫龙
-> Silent. Ancient. Unyielding.
-
-Born from code and refined through calculation,
-Elderviolet searches the board with patience and clarity.
-It does not roar — it calculates.
-It does not rush — it dominates.
-
----
-
-<div align="center">
-
-A modern UCI chess engine written in C++. <strong>Search deep. Evaluate precisely.</strong>
-
-<br><br>
-
-![License](https://img.shields.io/github/license/MaZhaoze/Elderviolet?style=for-the-badge)
-![Commits](https://img.shields.io/github/commits-since/MaZhaoze/Elderviolet/latest?style=for-the-badge)
-![Language](https://img.shields.io/badge/language-C++-6f42c1?style=for-the-badge)
-
-</div>
+<p align="center">
+  <img src="https://img.shields.io/github/license/MaZhaoze/Elderviolet?style=for-the-badge" alt="License">
+  <img src="https://img.shields.io/github/commits-since/MaZhaoze/Elderviolet/latest?style=for-the-badge" alt="Commits since latest">
+  <img src="https://img.shields.io/badge/language-C++-6f42c1?style=for-the-badge" alt="Language">
+</p>
 
 ---
 
 ## Overview
 
-**Elderviolet** is a UCI-compatible chess engine designed for performance, clarity, and search strength.
+Elderviolet is a UCI-compatible chess engine implemented in pure C++ (no external dependencies).  
+It does not provide a GUI. To play or test the engine, connect it to a UCI GUI such as:
 
-It focuses on classical search techniques and clean engine architecture.
-
-Elderviolet does not include a graphical user interface (GUI).
-To use the engine, connect it to a chess GUI such as:
-
-* Arena
-* CuteChess
-* BanksiaGUI
-* ChessBase
+- Arena
+- CuteChess / cutechess-cli
+- BanksiaGUI
+- ChessBase
 
 ---
 
 ## Features
 
-- ✔ PVS
-- ✔ LMR
-- ✔ Null Move Pruning
-- ✔ Reverse Futility Pruning
-- ✔ Futility Pruning
-- ✔ Razor
-- ✔ Mate Distance Pruning
-- ✔ SEE + SEE full fallback
-- ✔ Capture SEE prune
-- ✔ Late Move Pruning
-- ✔ TT + mate score 
-- ✔ Killer + History
-- ✔ Aspiration Window
-- ✔ Lazy SMP
----
+Search & pruning:
+- PVS
+- Aspiration window
+- LMR / LMP
+- Null-move pruning
+- Razor
+- Futility pruning (incl. reverse futility)
+- Mate distance pruning
 
-## Project Structure
+Move ordering:
+- Transposition table (TT) with mate score handling
+- Killer moves
+- History heuristic
 
-The project consists of the following core components:
+Tactical filters:
+- SEE pruning
+- Full SEE fallback (`see_full.h`)
 
-* `main.cpp` — Engine entry point
-* `uci.h` — UCI protocol implementation
-* `Search.h` — Search logic
-* `Evaluation.h` — Position evaluation
-* `MoveGeneration.h` — Move generation
-* `Position.h` — Board representation
-* `TT.h` — Transposition table
-* `types.h` — Core types and definitions
+Parallel:
+- Lazy SMP
 
 ---
 
-## Usage
+## Build
 
-After compiling the engine, run it inside a UCI-compatible GUI.
+This repository is header-heavy and uses `main.cpp` as the entry point.
 
-Example UCI commands:
+### Windows (MSVC)
 
-```
-uci
-isready
-position startpos
-go depth 10
-```
+Example (single translation unit build):
 
----
+```bat
+cl /O2 /std:c++20 /EHsc main.cpp
+````
 
-## Compiling
+### GCC / Clang
 
-On Windows (MSVC):
-
-```
-cl /O2 /std:c++20 main.cpp
-```
-
-On g++ / clang++:
-
-```
+```bash
 g++ -O3 -std=c++20 main.cpp -o Elderviolet
 ```
 
+Tip: for local testing you can add native optimizations:
+
+```bash
+g++ -O3 -std=c++20 -march=native main.cpp -o Elderviolet
+```
+
 ---
 
-## Philosophy
+## Run (UCI)
 
-Elderviolet is built with simplicity and control in mind.
+Run the engine in a GUI, or from a terminal.
 
-Every component is designed to be understandable, extendable, and efficient.
+Example UCI session:
 
-The goal is not complexity —
-but strength through structure.
+```text
+uci
+isready
+ucinewgame
+position startpos moves e2e4 e7e5
+go depth 12
+```
+
+Common options (depending on your build) are typically:
+
+* `Hash` (MB)
+* `Threads`
+
+---
+
+## Project Layout
+
+Key files in the repository root:
+
+* `main.cpp` — program entry point
+* `Engine.h` — engine coordination / high-level interface
+* `uci.h` — UCI protocol handling and option parsing
+* `Search.h` — search (PVS, pruning, SMP)
+* `Evaluation.h` — evaluation
+* `MoveGeneration.h` — move generation
+* `Position.h` — board representation / state
+* `Attack.h` — attack tables / helpers
+* `TT.h` — transposition table
+* `ZobristTables.h` — hashing keys / tables
+* `see_full.h` — full SEE implementation
+* `types.h` — core types / constants
+* `logo.png` — project logo
+
+---
+
+## Notes
+
+* The engine binaries (`*.exe`) in this folder are build artifacts and may be platform/CPU specific (e.g. AVX2).
+* For strength testing, prefer running matches with `cutechess-cli` and fixed settings.
 
 ---
 
 ## License
 
-This project is released under the MIT License.
-
+MIT License (see `LICENSE`).
