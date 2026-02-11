@@ -3,8 +3,10 @@
 #include <sstream>
 #include <cctype>
 #include <algorithm>
+#include <cstdint>
 
 #include "types.h"
+#include "ZobristTables.h"
 
 // =====================
 // Castling rights bits
@@ -32,6 +34,9 @@ struct Undo {
     int prevHalfmove = 0;
     int prevFullmove = 1;
 
+    // ✅ Zobrist key before move (fast undo)
+    uint64_t prevKey = 0;
+
     // For en passant capture
     int epCapturedSq = -1;
 
@@ -52,6 +57,9 @@ struct Position {
     int halfmoveClock = 0;
     int fullmoveNumber = 1;
 
+    // ✅ Incremental Zobrist key (O(1) access)
+    uint64_t zobKey = 0;
+
     Position() {
         clear();
         set_startpos();
@@ -67,6 +75,7 @@ struct Position {
         epSquare = -1;
         halfmoveClock = 0;
         fullmoveNumber = 1;
+        zobKey = 0;
     }
 
     static inline Piece char_to_piece(char c) {
@@ -105,6 +114,85 @@ struct Position {
     }
 
     // ---------------------
+    // Zobrist (full recompute)
+    // Only used on init / debug
+    // ---------------------
+    inline void recompute_zobrist() {
+        uint64_t k = 0;
+        for (int sq = 0; sq < 64; sq++) {
+            Piece p = board[sq];
+            if (p == NO_PIECE) continue;
+            int pi = (int)p;
+            if ((unsigned)pi >= 16u) continue;
+            k ^= g_zob.psq[pi][sq];
+        }
+        if (side == BLACK) k ^= g_zob.sideKey;
+        k ^= g_zob.castleKey[castlingRights & 15];
+        if (epSquare != -1) k ^= g_zob.epKey[file_of(epSquare) & 7];
+        zobKey = k;
+    }
+
+    // ---------------------
+    // Zobrist (incremental apply after do_move)
+    // Assumes board/side/castlingRights/epSquare already updated
+    // ---------------------
+    inline void apply_zobrist_delta_after_move(const Undo& u, Move m) {
+        uint64_t k = u.prevKey;
+
+        // EP key: remove old, add new
+        if (u.prevEpSquare != -1) k ^= g_zob.epKey[file_of(u.prevEpSquare) & 7];
+        if (epSquare != -1)       k ^= g_zob.epKey[file_of(epSquare) & 7];
+
+        // Castling key: remove old, add new
+        k ^= g_zob.castleKey[u.prevCastling & 15];
+        k ^= g_zob.castleKey[castlingRights & 15];
+
+        // Side toggle
+        k ^= g_zob.sideKey;
+
+        const int from = from_sq(m);
+        const int to   = to_sq(m);
+
+        // moved piece off from-square
+        {
+            int pi = (int)u.moved;
+            if ((unsigned)pi < 16u) k ^= g_zob.psq[pi][from];
+        }
+
+        // captured piece off board (normal capture on 'to', EP on u.epCapturedSq)
+        if (flags_of(m) & MF_EP) {
+            if (u.epCapturedSq != -1 && u.captured != NO_PIECE) {
+                int pi = (int)u.captured;
+                if ((unsigned)pi < 16u) k ^= g_zob.psq[pi][u.epCapturedSq];
+            }
+        } else if (u.captured != NO_PIECE) {
+            int pi = (int)u.captured;
+            if ((unsigned)pi < 16u) k ^= g_zob.psq[pi][to];
+        }
+
+        // final piece on 'to' (after promotion/castle/normal)
+        {
+            Piece finalP = board[to];
+            int pi = (int)finalP;
+            if ((unsigned)pi < 16u) k ^= g_zob.psq[pi][to];
+        }
+
+        // castling rook move
+        if (flags_of(m) & MF_CASTLE) {
+            if (u.rookFrom != -1 && u.rookTo != -1) {
+                Piece rook = make_piece(u.prevSide, ROOK);
+                int pi = (int)rook;
+                if ((unsigned)pi < 16u) {
+                    k ^= g_zob.psq[pi][u.rookFrom];
+                    k ^= g_zob.psq[pi][u.rookTo];
+                }
+            }
+        }
+
+        zobKey = k;
+    }
+
+    // ---------------------
     // startpos
     // ---------------------
     void set_startpos() {
@@ -125,6 +213,8 @@ struct Position {
         epSquare = -1;
         halfmoveClock = 0;
         fullmoveNumber = 1;
+
+        recompute_zobrist();
     }
 
     // ---------------------
@@ -181,6 +271,8 @@ struct Position {
         // defaults if missing
         if (halfmoveClock < 0) halfmoveClock = 0;
         if (fullmoveNumber <= 0) fullmoveNumber = 1;
+
+        recompute_zobrist();
     }
 
     // ---------------------
@@ -215,6 +307,7 @@ struct Position {
         u.prevEpSquare = epSquare;
         u.prevHalfmove = halfmoveClock;
         u.prevFullmove = fullmoveNumber;
+        u.prevKey      = zobKey;          // ✅保存 key（fast undo + delta base）
 
         const int from = from_sq(m);
         const int to   = to_sq(m);
@@ -323,6 +416,9 @@ struct Position {
         // Fullmove increments after Black makes a move
         if (us == BLACK) fullmoveNumber++;
 
+        // ✅ Apply incremental Zobrist update (O(1))
+        apply_zobrist_delta_after_move(u, m);
+
         return u;
     }
 
@@ -351,12 +447,16 @@ struct Position {
             board[from] = u.moved;
             board[to] = NO_PIECE; // EP target square was empty
             board[u.epCapturedSq] = u.captured;
+            zobKey = u.prevKey; // ✅ fast restore key
             return;
         }
 
         // Normal undo (includes promo)
         board[from] = u.moved;
         board[to]   = u.captured;
+
+        // ✅ fast restore key (always correct)
+        zobKey = u.prevKey;
     }
 
     // For debugging / sanity

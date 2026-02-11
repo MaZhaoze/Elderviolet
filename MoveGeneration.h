@@ -1,3 +1,6 @@
+// ============================
+// MoveGeneration.h (REPLACE)
+// ============================
 #pragma once
 #include <vector>
 #include <cmath>
@@ -23,24 +26,19 @@ inline void push_move(const Position& pos, std::vector<Move>& moves,
     Piece dst = pos.board[to];
     if (same_color(dst, pos.side)) return;
 
-    // ✅ 自动加 capture
+    // auto capture flag
     if (dst != NO_PIECE) flags |= MF_CAPTURE;
 
-    // ✅ 参数顺序必须是 flags在前，promo在后
     moves.push_back(make_move(from, to, flags, promo));
 }
 
-
-
-
 inline void add_promo(const Position& pos, std::vector<Move>& moves, int from, int to, int flags = 0) {
-    // 1=N 2=B 3=R 4=Q
+    // promo: 1=N 2=B 3=R 4=Q
     push_move(pos, moves, from, to, flags | MF_PROMO, 1);
     push_move(pos, moves, from, to, flags | MF_PROMO, 2);
     push_move(pos, moves, from, to, flags | MF_PROMO, 3);
     push_move(pos, moves, from, to, flags | MF_PROMO, 4);
 }
-
 
 // =====================
 // pseudo-legal generator (includes castling + EP)
@@ -94,7 +92,7 @@ inline void generate_pseudo_legal(const Position& pos, std::vector<Move>& moves)
                 else push_move(pos, moves, sq, capR);
             }
 
-            // ✅ En passant
+            // EP
             if (pos.epSquare != -1) {
                 if (file_of(sq) != 0 && capL == pos.epSquare) {
                     push_move(pos, moves, sq, capL, MF_EP);
@@ -141,33 +139,32 @@ inline void generate_pseudo_legal(const Position& pos, std::vector<Move>& moves)
                 push_move(pos, moves, sq, to);
             }
 
-            // ✅ Castling pseudo generation (path empty + rights)
-				if (us == WHITE && sq == E1) {
-				if ((pos.castlingRights & CR_WK) &&
-					pos.board[F1] == NO_PIECE &&
-					pos.board[G1] == NO_PIECE) {
-					push_move(pos, moves, E1, G1, MF_CASTLE, 0); // ✅ flags=MF_CASTLE, promo=0
-				}
-				if ((pos.castlingRights & CR_WQ) &&
-					pos.board[D1] == NO_PIECE &&
-					pos.board[C1] == NO_PIECE &&
-					pos.board[B1] == NO_PIECE) {
-					push_move(pos, moves, E1, C1, MF_CASTLE, 0);
-				}
-			} else if (us == BLACK && sq == E8) {
-				if ((pos.castlingRights & CR_BK) &&
-					pos.board[F8] == NO_PIECE &&
-					pos.board[G8] == NO_PIECE) {
-					push_move(pos, moves, E8, G8, MF_CASTLE, 0);
-				}
-				if ((pos.castlingRights & CR_BQ) &&
-					pos.board[D8] == NO_PIECE &&
-					pos.board[C8] == NO_PIECE &&
-					pos.board[B8] == NO_PIECE) {
-					push_move(pos, moves, E8, C8, MF_CASTLE, 0);
-				}
-			}
-
+            // castling pseudo (rights + empty path)
+            if (us == WHITE && sq == E1) {
+                if ((pos.castlingRights & CR_WK) &&
+                    pos.board[F1] == NO_PIECE &&
+                    pos.board[G1] == NO_PIECE) {
+                    push_move(pos, moves, E1, G1, MF_CASTLE, 0);
+                }
+                if ((pos.castlingRights & CR_WQ) &&
+                    pos.board[D1] == NO_PIECE &&
+                    pos.board[C1] == NO_PIECE &&
+                    pos.board[B1] == NO_PIECE) {
+                    push_move(pos, moves, E1, C1, MF_CASTLE, 0);
+                }
+            } else if (us == BLACK && sq == E8) {
+                if ((pos.castlingRights & CR_BK) &&
+                    pos.board[F8] == NO_PIECE &&
+                    pos.board[G8] == NO_PIECE) {
+                    push_move(pos, moves, E8, G8, MF_CASTLE, 0);
+                }
+                if ((pos.castlingRights & CR_BQ) &&
+                    pos.board[D8] == NO_PIECE &&
+                    pos.board[C8] == NO_PIECE &&
+                    pos.board[B8] == NO_PIECE) {
+                    push_move(pos, moves, E8, C8, MF_CASTLE, 0);
+                }
+            }
 
             continue;
         }
@@ -216,7 +213,6 @@ inline bool legal_castle_path_ok(const Position& pos, Move m) {
     Color us = pos.side;
     Color them = ~us;
 
-    // King cannot be in check now
     if (attacks::in_check(pos, us)) return false;
 
     if (us == WHITE) {
@@ -246,10 +242,11 @@ inline bool legal_castle_path_ok(const Position& pos, Move m) {
 }
 
 // =====================
-// LEGAL move generator
+// LEGAL move generator (kept for root only / debug)
+// NOTE: don't call this in every negamax node for speed
 // =====================
 inline void generate_legal(Position& pos, std::vector<Move>& legal) {
-    std::vector<Move> pseudo;
+    static thread_local std::vector<Move> pseudo;
     generate_pseudo_legal(pos, pseudo);
 
     legal.clear();

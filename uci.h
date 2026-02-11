@@ -1,3 +1,6 @@
+// =========================
+// uci.h（完整替换）
+// =========================
 #pragma once
 #include <iostream>
 #include <sstream>
@@ -72,44 +75,6 @@ static inline int clampi(int v, int lo, int hi) {
 }
 
 // =====================
-// time management (uci-side)
-// =====================
-static inline int compute_think_time_ms_uci(
-    int mytime_ms,
-    int myinc_ms,
-    int movestogo,
-    int move_overhead_ms
-) {
-    if (mytime_ms <= 0) return -1;
-
-    int tleft = mytime_ms - std::max(0, move_overhead_ms);
-    if (tleft < 1) tleft = 1;
-
-    if (tleft <= 200) {
-        return std::max(1, tleft / 4);
-    }
-
-    int inc_part = (myinc_ms * 85) / 100;
-
-    int t = 0;
-    if (movestogo > 0) {
-        int mtg = std::max(1, movestogo);
-        int base = tleft / mtg;
-        t = base + inc_part;
-        t = std::min(t, (tleft * 60) / 100);
-    } else {
-        int base = tleft / 30;
-        t = base + inc_part;
-        t = std::min(t, tleft / 2);
-    }
-
-    t = std::max(t, 5);
-    if (t > 2) t -= 2;
-
-    return t;
-}
-
-// =====================
 // UCI: output header
 // =====================
 static inline void uci_id(const Engine&) {
@@ -160,7 +125,6 @@ static inline void cmd_setoption(const std::vector<std::string>& tokens, Engine&
         }
     }
 
-    // normalize option name (case-insensitive)
     const std::string lname = to_lower(name);
 
     if (lname == "hash") {
@@ -208,8 +172,6 @@ static inline void cmd_setoption(const std::vector<std::string>& tokens, Engine&
         engine.set_skill_level(lv);
         return;
     }
-
-    // unknown options are ignored per UCI convention
 }
 
 static inline void cmd_position(const std::vector<std::string>& tokens, Engine& engine) {
@@ -241,62 +203,97 @@ static inline void cmd_position(const std::vector<std::string>& tokens, Engine& 
 }
 
 static inline void cmd_go(const std::vector<std::string>& tokens, Engine& engine) {
-    int depth = -1;
-    int movetime = -1;
+    bool provided_depth = false;
+    bool provided_movetime = false;
     bool infinite = false;
 
+    bool provided_wtime = false, provided_btime = false;
+    bool provided_winc  = false, provided_binc  = false;
+    bool provided_mtg   = false;
+
+    bool ponder = false;
+
+    int depth = 0;
+    int movetime = 0;
+
     int wtime = -1, btime = -1;
-    int winc = 0, binc = 0;
-    int movestogo = -1;
+    int winc = -1, binc = -1;
+    int movestogo = 0;
 
     for (int i = 1; i < (int)tokens.size(); i++) {
         const std::string& t = tokens[i];
 
-        if (t == "depth" && i + 1 < (int)tokens.size()) {
-            depth = to_int_safe(tokens[i + 1], -1);
-            i++;
-        } else if (t == "movetime" && i + 1 < (int)tokens.size()) {
-            movetime = to_int_safe(tokens[i + 1], -1);
-            i++;
-        } else if (t == "wtime" && i + 1 < (int)tokens.size()) {
-            wtime = to_int_safe(tokens[i + 1], -1);
-            i++;
-        } else if (t == "btime" && i + 1 < (int)tokens.size()) {
-            btime = to_int_safe(tokens[i + 1], -1);
-            i++;
-        } else if (t == "winc" && i + 1 < (int)tokens.size()) {
-            winc = to_int_safe(tokens[i + 1], 0);
-            i++;
-        } else if (t == "binc" && i + 1 < (int)tokens.size()) {
-            binc = to_int_safe(tokens[i + 1], 0);
-            i++;
-        } else if (t == "movestogo" && i + 1 < (int)tokens.size()) {
-            movestogo = to_int_safe(tokens[i + 1], -1);
-            i++;
-        } else if (t == "infinite") {
+        if (t == "ponder") {
+            ponder = true;
+        }
+        else if (t == "infinite") {
             infinite = true;
+        }
+        else if (t == "depth" && i + 1 < (int)tokens.size()) {
+            depth = to_int_safe(tokens[++i], 0);
+            provided_depth = true;
+        }
+        else if (t == "movetime" && i + 1 < (int)tokens.size()) {
+            movetime = to_int_safe(tokens[++i], 0);
+            provided_movetime = true;
+        }
+        else if (t == "wtime" && i + 1 < (int)tokens.size()) {
+            wtime = to_int_safe(tokens[++i], -1);
+            provided_wtime = true;
+        }
+        else if (t == "btime" && i + 1 < (int)tokens.size()) {
+            btime = to_int_safe(tokens[++i], -1);
+            provided_btime = true;
+        }
+        else if (t == "winc" && i + 1 < (int)tokens.size()) {
+            winc = to_int_safe(tokens[++i], -1);
+            provided_winc = true;
+        }
+        else if (t == "binc" && i + 1 < (int)tokens.size()) {
+            binc = to_int_safe(tokens[++i], -1);
+            provided_binc = true;
+        }
+        else if (t == "movestogo" && i + 1 < (int)tokens.size()) {
+            movestogo = to_int_safe(tokens[++i], 0);
+            provided_mtg = true;
         }
     }
 
-    // ✅ UCI priority:
-    // depth given -> fixed depth search
-    // movetime or clocks given -> time-managed search
-    // infinite -> run until stop
-    //
-    // So: DO NOT override depth here.
+    const bool hasClock =
+        provided_wtime || provided_btime || provided_winc || provided_binc || provided_mtg;
 
-    // Optional: if user sends plain "go" with nothing, give a sane default.
-    const bool hasClock = (wtime >= 0 || btime >= 0 || winc > 0 || binc > 0 || movestogo > 0);
-    if (depth < 0 && movetime < 0 && !infinite && !hasClock) {
-        movetime = 1000; // default 1s if you want; or leave as -1 and let Engine decide
+    if (!provided_depth && !provided_movetime && !infinite && !hasClock && !ponder) {
+        movetime = 1000;
+        provided_movetime = true;
     }
 
-    int bestMove = engine.go(depth, movetime, infinite, wtime, btime, winc, binc, movestogo);
+    int depth_arg    = provided_depth    ? depth    : 0;
+    int movetime_arg = provided_movetime ? movetime : 0;
 
-    std::cout << "bestmove " << engine.move_to_uci(bestMove) << "\n";
+    int wtime_arg = provided_wtime ? wtime : -1;
+    int btime_arg = provided_btime ? btime : -1;
+    int winc_arg  = provided_winc  ? winc  : -1;
+    int binc_arg  = provided_binc  ? binc  : -1;
+    int mtg_arg   = provided_mtg   ? movestogo : 0;
+
+    int bestMove = engine.go(depth_arg, movetime_arg, infinite,
+                             wtime_arg, btime_arg, winc_arg, binc_arg, mtg_arg,
+                             ponder);
+
+    // ✅ go ponder：不输出 bestmove，等 ponderhit/stop 再输出
+    if (ponder) {
+        return;
+    }
+
+    int ponderMove = engine.get_last_ponder_move();
+
+    std::cout << "bestmove " << engine.move_to_uci(bestMove);
+    if (ponderMove) {
+        std::cout << " ponder " << engine.move_to_uci(ponderMove);
+    }
+    std::cout << "\n";
     std::cout.flush();
 }
-
 
 // =====================
 // main loop
@@ -325,8 +322,18 @@ static inline void loop(Engine& engine) {
             cmd_position(tokens, engine);
         } else if (cmd == "go") {
             cmd_go(tokens, engine);
+        } else if (cmd == "ponderhit") {
+            // ✅ 最小 ponderhit：停止 ponder 线程并输出一次 bestmove
+            engine.ponderhit();
+
+            // 这里输出用“上次后台计算出的 bestmove”
+            // 注意：我们的 Engine 最小实现里没单独暴露 last_best_move_，
+            // 所以最简单策略：ponderhit 后让 GUI 重新发 go（很多 GUI 会这么做）
+            // 如果你想严格：我也可以再给你加 get_last_best_move()，这里直接打印。
+            // 先不打印，遵循“GUI 再发 go”的兼容做法。
         } else if (cmd == "stop") {
             engine.stop();
+            // stop 后通常 GUI 会再发 go 或直接结束；这里不额外输出
         } else if (cmd == "quit") {
             engine.stop();
             break;

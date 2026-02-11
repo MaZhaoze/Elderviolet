@@ -14,6 +14,7 @@
 
 #include "types.h"
 #include "Position.h"
+#include "ZobristTables.h"   // ✅ 只放表 + inline g_zob（推荐）
 #include "MoveGeneration.h"
 #include "Attack.h"
 #include "Evaluation.h"
@@ -97,7 +98,6 @@ struct SearchInfo {
 };
 
 inline int selDepth = 0;
-inline std::chrono::steady_clock::time_point startTime;
 
 // =====================================
 // constants
@@ -118,8 +118,8 @@ inline int color_index(Color c) {
 // =====================================
 // global stop/time (MULTI-THREAD SAFE)
 // =====================================
-inline std::atomic<bool>    g_stop{false};
-inline std::atomic<int64_t> g_endTimeMs{0};
+inline std::atomic<bool>     g_stop{false};
+inline std::atomic<int64_t>  g_endTimeMs{0};
 inline std::atomic<uint64_t> g_nodes_total{0};
 
 inline int64_t now_ms() {
@@ -155,6 +155,7 @@ struct Limits {
 
 struct Result {
     Move bestMove = 0;
+    Move ponderMove = 0;  // ✅ PV[1]，没有就 0
     int  score = 0;
     uint64_t nodes = 0;
 };
@@ -193,53 +194,6 @@ inline int from_tt_score(int s, int ply) {
 }
 
 // =====================================
-// Zobrist
-// =====================================
-struct Zobrist {
-    uint64_t psq[16][64]{};
-    uint64_t sideKey = 0;
-    uint64_t castleKey[16]{};
-    uint64_t epKey[8]{};
-
-    Zobrist() {
-        std::mt19937_64 rng(20260126ULL);
-        auto R = [&]() { return rng(); };
-
-        for (int p = 0; p < 16; p++)
-            for (int s = 0; s < 64; s++)
-                psq[p][s] = R();
-
-        sideKey = R();
-
-        for (int i = 0; i < 16; i++) castleKey[i] = R();
-        for (int i = 0; i < 8; i++)  epKey[i] = R();
-    }
-
-    inline uint64_t key(const Position& pos) const {
-        uint64_t k = 0;
-        for (int sq = 0; sq < 64; sq++) {
-            Piece p = pos.board[sq];
-            if (p == NO_PIECE) continue;
-
-            int pi = (int)p;
-            if (pi < 0 || pi >= 16) continue;
-
-            k ^= psq[pi][sq];
-        }
-
-        if (pos.side == BLACK) k ^= sideKey;
-
-        k ^= castleKey[pos.castlingRights & 15];
-
-        if (pos.epSquare != -1) {
-            int f = file_of(pos.epSquare);
-            k ^= epKey[f & 7];
-        }
-        return k;
-    }
-};
-
-// =====================================
 // move->uci
 // =====================================
 inline char file_char(int f) { return char('a' + f); }
@@ -268,30 +222,6 @@ inline std::string move_to_uci(Move m) {
     return s;
 }
 
-// =====================================
-// move existence / legality
-// =====================================
-inline bool move_exists_pseudo(const Position& pos, Move m) {
-    if (!m) return false;
-    std::vector<Move> tmp;
-    movegen::generate_pseudo_legal(pos, tmp);
-    for (Move x : tmp) if (x == m) return true;
-    return false;
-}
-
-inline bool is_move_legal_fast(Position& pos, Move m) {
-    Color us = pos.side;
-
-    if (flags_of(m) & MF_CASTLE) {
-        if (!movegen::legal_castle_path_ok(pos, m)) return false;
-    }
-
-    Undo u = pos.do_move(m);
-    bool ok = !attacks::in_check(pos, us);
-    pos.undo_move(m, u);
-    return ok;
-}
-
 // =======================================
 // Hash TT sampling
 // =======================================
@@ -309,7 +239,9 @@ inline int hashfull_permille_fallback(const TT& tt) {
 }
 
 // =====================================
-// ✅ Shared TT (thread-safe)
+// ✅ Shared TT
+// probe_copy 无锁读（提速）
+// store 仍然加锁
 // =====================================
 struct SharedTT {
     TT tt;
@@ -324,7 +256,6 @@ struct SharedTT {
     }
 
     inline bool probe_copy(uint64_t key, TTEntry& out) {
-        std::lock_guard<std::mutex> g(locks[lock_index(key)]);
         TTEntry* e = tt.probe(key);
         if (!e || e->key != key) return false;
         out = *e;
@@ -336,7 +267,6 @@ struct SharedTT {
         TTEntry* e = tt.probe(key);
         if (!e) return;
 
-        // deeper wins (simple + stable)
         if (e->key != key || depth >= e->depth) {
             e->key   = key;
             e->best  = best;
@@ -355,14 +285,47 @@ struct SharedTT {
 // Searcher
 // =====================================
 struct Searcher {
-    // ✅ shared resources
     SharedTT* stt = nullptr;
-    Zobrist*  pzob = nullptr;
 
     Move killer[2][128]{};
     int  history[2][64][64]{};
 
+    // ✅ Countermove + Continuation history（2-ply）
+    Move countermove[64][64]{};
+    int  contHist[2][64][64][64][64]{};
+
     uint64_t nodes = 0;
+
+    // ✅✅✅ 正确计数器：nodes_batch 永远只做余数 [0, NODE_BATCH)
+    uint64_t nodes_batch = 0;
+    static constexpr uint64_t NODE_BATCH = 4096; // power of two
+
+    inline void batch_time_check_soft() {
+        int64_t end = g_endTimeMs.load(std::memory_order_relaxed);
+        if (end == 0) return;
+        if (now_ms() >= end) g_stop.store(true, std::memory_order_relaxed);
+    }
+
+    inline void flush_nodes_batch() {
+        if (nodes_batch) {
+            g_nodes_total.fetch_add(nodes_batch, std::memory_order_relaxed);
+            nodes_batch = 0;
+        }
+    }
+
+    inline void add_node() {
+        nodes++;
+
+        // 余数++
+        nodes_batch++;
+
+        // 满 batch：上报一次并清零（绝不重复）
+        if (nodes_batch == NODE_BATCH) {
+            g_nodes_total.fetch_add(NODE_BATCH, std::memory_order_relaxed);
+            nodes_batch = 0;
+            batch_time_check_soft();
+        }
+    }
 
     struct PVLine {
         Move m[128]{};
@@ -371,22 +334,9 @@ struct Searcher {
 
     Searcher() = default;
 
-    inline void bind(SharedTT* shared, Zobrist* z) {
-        stt = shared;
-        pzob = z;
-    }
+    inline void bind(SharedTT* shared) { stt = shared; }
 
-    void set_hash_mb(int) {}
-    void clear_tt() {}
-
-    inline uint64_t key_of(const Position& pos) const {
-        return pzob->key(pos);
-    }
-
-    inline void add_node() {
-        nodes++;
-        g_nodes_total.fetch_add(1, std::memory_order_relaxed);
-    }
+    inline uint64_t key_of(const Position& pos) const { return pos.zobKey; }
 
     uint64_t keyStack[256]{};
     int keyPly = 0;
@@ -395,6 +345,7 @@ struct Searcher {
 
     std::vector<Move> plyMoves[MAX_PLY];
     std::vector<int>  plyScores[MAX_PLY];
+    std::vector<int>  plyOrder[MAX_PLY];
 
     struct QNode {
         Move m;
@@ -411,10 +362,6 @@ struct Searcher {
         return pos.board[to] != NO_PIECE;
     }
 
-    inline bool is_quiet(const Position& pos, Move m) {
-        return !is_capture(pos, m) && promo_of(m) == 0;
-    }
-
     inline int mvv_lva(Piece victim, Piece attacker) {
         static const int V[7] = {0,100,320,330,500,900,0};
         int vv = (victim == NO_PIECE) ? 0 : V[type_of(victim)];
@@ -422,7 +369,7 @@ struct Searcher {
         return vv * 10 - aa;
     }
 
-    inline int see(const Position& pos, Move m) {
+    inline int see_quick(const Position& pos, Move m) {
         int from = from_sq(m);
         int to   = to_sq(m);
 
@@ -440,7 +387,8 @@ struct Searcher {
         return vv - av;
     }
 
-    inline int move_score(const Position& pos, Move m, Move ttMove, int ply) {
+    inline int move_score(const Position& pos, Move m, Move ttMove, int ply,
+                          int prevFrom, int prevTo) {
         ply = std::min(ply, 127);
 
         if (m == ttMove) return 1000000000;
@@ -460,7 +408,7 @@ struct Searcher {
             if (flags_of(m) & MF_EP)
                 victim = make_piece(flip_color(pos.side), PAWN);
 
-            int s = see(pos, m);
+            int s = see_quick(pos, m);
 
             if (promo_of(m) || s < -250)
                 s = see_full(pos, m);
@@ -475,7 +423,14 @@ struct Searcher {
         if (m == killer[0][ply]) sc += 20000000;
         else if (m == killer[1][ply]) sc += 15000000;
 
-        sc += history[color_index(pos.side)][from][to];
+        const int ci = color_index(pos.side);
+
+        sc += history[ci][from][to] / 2;
+
+        if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u) {
+            if (m == countermove[prevFrom][prevTo]) sc += 18000000;
+            sc += contHist[ci][prevFrom][prevTo][from][to];
+        }
 
         if (type_of(mover) == BISHOP) sc += 2000;
         if (type_of(mover) == KNIGHT) sc += 1000;
@@ -498,21 +453,9 @@ struct Searcher {
         return sc;
     }
 
-    inline void pick_best(std::vector<Move>& mv, std::vector<int>& sc, int i) {
-        int best = i;
-        int bestSc = sc[i];
-        for (int j = i + 1; j < (int)mv.size(); j++) {
-            if (sc[j] > bestSc) {
-                bestSc = sc[j];
-                best = j;
-            }
-        }
-        if (best != i) {
-            std::swap(mv[i], mv[best]);
-            std::swap(sc[i], sc[best]);
-        }
-    }
-
+    // =====================================
+    // qsearch
+    // =====================================
     int qsearch(Position& pos, int alpha, int beta, int ply, int lastTo, bool lastWasCap) {
         add_node();
         selDepth = std::max(selDepth, ply);
@@ -542,7 +485,7 @@ struct Searcher {
         constexpr int QUIET_CHECK_MAX_PLY = 2;
         constexpr int DELTA_MARGIN = 140;
         constexpr int SEE_CUT = -120;
-        constexpr int SEE_FULL_TRIGGER = -200;
+        constexpr int SEE_FULL_TRIGGER = -240;
 
         const bool shallow = (ply <= 1);
 
@@ -557,11 +500,13 @@ struct Searcher {
             if (!inCheck && !(cap || promo || quietCandidate)) continue;
 
             int gain = 0;
+            Piece victim = NO_PIECE;
+
             if (cap) {
                 int to = to_sq(m);
                 if (flags_of(m) & MF_EP) gain += 100;
                 else {
-                    Piece victim = pos.board[to];
+                    victim = pos.board[to];
                     gain += (victim == NO_PIECE ? 0 : PVV[type_of(victim)]);
                 }
             }
@@ -575,10 +520,19 @@ struct Searcher {
                 if (!promo && stand + gain + DELTA_MARGIN <= alpha) continue;
 
                 if (!promo) {
-                    int sQ = see(pos, m);
+                    int sQ = see_quick(pos, m);
+
                     if (sQ <= SEE_FULL_TRIGGER) {
-                        int sF = see_full(pos, m);
-                        if (sF < SEE_CUT) continue;
+                        bool bigVictim = false;
+                        if (flags_of(m) & MF_EP) bigVictim = false;
+                        else if (victim != NO_PIECE && type_of(victim) >= ROOK) bigVictim = true;
+
+                        if (bigVictim) {
+                            int sF = see_full(pos, m);
+                            if (sF < SEE_CUT) continue;
+                        } else {
+                            if (sQ < SEE_CUT) continue;
+                        }
                     } else if (sQ < SEE_CUT) {
                         continue;
                     }
@@ -640,22 +594,36 @@ struct Searcher {
         return alpha;
     }
 
+    // =====================================
+    // Null move (MUST keep zobKey consistent)
+    // =====================================
     struct NullMoveUndo {
         int   ep;
         Color side;
+        uint64_t key;
     };
 
     inline void do_null_move(Position& pos, NullMoveUndo& u) {
         u.ep   = pos.epSquare;
         u.side = pos.side;
+        u.key  = pos.zobKey;
+
+        uint64_t k = pos.zobKey;
+
+        if (pos.epSquare != -1)
+            k ^= g_zob.epKey[file_of(pos.epSquare) & 7];
+
+        k ^= g_zob.sideKey;
 
         pos.epSquare = -1;
         pos.side = (pos.side == WHITE) ? BLACK : WHITE;
+        pos.zobKey = k;
     }
 
     inline void undo_null_move(Position& pos, const NullMoveUndo& u) {
         pos.epSquare = u.ep;
         pos.side     = u.side;
+        pos.zobKey   = u.key;
     }
 
     inline bool has_non_pawn_material(const Position& pos, Color c) {
@@ -713,7 +681,7 @@ struct Searcher {
         Move prev = 0;
 
         for (int i = 0; i < maxLen && out.len < 128; i++) {
-            const uint64_t k = key_of(pos);
+            const uint64_t k = pos.zobKey;
 
             if (seen_before(k)) break;
             if (seenN < 128) seen[seenN++] = k;
@@ -751,8 +719,12 @@ struct Searcher {
         for (int i = ucnt - 1; i >= 0; i--) pos.undo_move(um[i], undos[i]);
     }
 
+    // =====================================
+    // negamax
+    // =====================================
     int negamax(Position& pos, int depth, int alpha, int beta,
-                int ply, int lastTo, bool lastWasCap, PVLine& pv) {
+                int ply, int prevFrom, int prevTo,
+                int lastTo, bool lastWasCap, PVLine& pv) {
         pv.len = 0;
 
         if (time_up()) return alpha;
@@ -769,7 +741,7 @@ struct Searcher {
         beta  = std::min(beta,  MATE - ply - 1);
         if (alpha >= beta) return alpha;
 
-        const uint64_t key = key_of(pos);
+        const uint64_t key = pos.zobKey;
 
         if (ply > 0) {
             for (int i = keyPly - 2; i >= 0; i -= 2) {
@@ -845,7 +817,7 @@ struct Searcher {
 
                     PVLine npv;
                     int score = -negamax(pos, depth - 1 - R, -beta, -beta + 1,
-                                        ply + 1, -1, false, npv);
+                                         ply + 1, -1, -1, -1, false, npv);
 
                     undo_null_move(pos, nu);
 
@@ -860,7 +832,7 @@ struct Searcher {
         moves.clear();
         scores.clear();
 
-        movegen::generate_pseudo_legal(pos, moves);
+        movegen::generate_legal(pos, moves);
 
         if (moves.empty()) {
             if (inCheck) return -MATE + ply;
@@ -869,7 +841,25 @@ struct Searcher {
 
         scores.resize(moves.size());
         for (int i = 0; i < (int)moves.size(); i++)
-            scores[i] = move_score(pos, moves[i], ttMove, ply);
+            scores[i] = move_score(pos, moves[i], ttMove, ply, prevFrom, prevTo);
+
+        auto& order = plyOrder[ply];
+        order.clear();
+        order.resize(moves.size());
+        for (int i = 0; i < (int)moves.size(); i++) order[i] = i;
+
+        constexpr int NODE_ORDER_K = 12;
+        int K = std::min<int>(NODE_ORDER_K, (int)order.size());
+
+        for (int i = 0; i < K; i++) {
+            int bi = i;
+            int bs = scores[order[i]];
+            for (int j = i + 1; j < (int)order.size(); j++) {
+                int sj = scores[order[j]];
+                if (sj > bs) { bs = sj; bi = j; }
+            }
+            if (bi != i) std::swap(order[i], order[bi]);
+        }
 
         int bestScore = -INF;
         Move bestMove = 0;
@@ -877,19 +867,17 @@ struct Searcher {
 
         PVLine bestPV; bestPV.len = 0;
 
-        bool foundLegal = false;
         int legalMovesSearched = 0;
         int quietMovesSearched = 0;
 
-        for (int i = 0; i < (int)moves.size(); i++) {
-            pick_best(moves, scores, i);
-            Move m = moves[i];
+        for (int kk = 0; kk < (int)order.size(); kk++) {
+            if (time_up()) return alpha;
 
+            Move m = moves[order[kk]];
             if (!move_sane_basic(pos, m)) continue;
 
-            if (flags_of(m) & MF_CASTLE) {
-                if (!movegen::legal_castle_path_ok(pos, m)) continue;
-            }
+            const int curFrom = from_sq(m);
+            const int curTo   = to_sq(m);
 
             const bool isCap   = is_capture(pos, m) || (flags_of(m) & MF_EP);
             const bool isPromo = (promo_of(m) != 0);
@@ -906,7 +894,7 @@ struct Searcher {
             }
 
             if (!inCheck && isCap && !isPromo && ply > 0 && depth <= 4 && m != ttMove) {
-                int sQ = see(pos, m);
+                int sQ = see_quick(pos, m);
                 if (sQ < -200) {
                     int sF = see_full(pos, m);
                     if (sF < -120) continue;
@@ -917,12 +905,6 @@ struct Searcher {
 
             Undo u = pos.do_move(m);
 
-            if (attacks::in_check(pos, us)) {
-                pos.undo_move(m, u);
-                continue;
-            }
-
-            foundLegal = true;
             legalMovesSearched++;
             if (isQuiet) quietMovesSearched++;
 
@@ -934,7 +916,7 @@ struct Searcher {
 
             if (legalMovesSearched == 1) {
                 score = -negamax(pos, depth - 1, -beta, -alpha,
-                                ply + 1, nextLastTo, nextLastWasCap, childPV);
+                                 ply + 1, curFrom, curTo, nextLastTo, nextLastWasCap, childPV);
             } else {
                 int reduction = 0;
                 if (depth >= 3 && !inCheck && isQuiet && ply > 0) {
@@ -943,25 +925,34 @@ struct Searcher {
                     if (legalMovesSearched > 10) reduction++;
                     if (depth >= 7 && legalMovesSearched > 14) reduction++;
                     reduction = std::min(reduction, depth - 2);
+
+                    int ci = color_index(us);
+                    int h = history[ci][curFrom][curTo] / 2;
+                    if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u)
+                        h += contHist[ci][prevFrom][prevTo][curFrom][curTo];
+
+                    if (h < 2000) reduction++;
+                    if (h > 60000) reduction = std::max(0, reduction - 1);
+                    reduction = std::min(reduction, depth - 2);
                 }
 
                 int rd = depth - 1 - reduction;
                 if (rd < 0) rd = 0;
 
                 score = -negamax(pos, rd, -alpha - 1, -alpha,
-                                ply + 1, nextLastTo, nextLastWasCap, childPV);
+                                 ply + 1, curFrom, curTo, nextLastTo, nextLastWasCap, childPV);
 
                 if (score > alpha && reduction > 0 && rd != depth - 1) {
                     PVLine childPV2;
                     score = -negamax(pos, depth - 1, -alpha - 1, -alpha,
-                                    ply + 1, nextLastTo, nextLastWasCap, childPV2);
+                                     ply + 1, curFrom, curTo, nextLastTo, nextLastWasCap, childPV2);
                     childPV = childPV2;
                 }
 
                 if (score > alpha && score < beta) {
                     PVLine childPV3;
                     score = -negamax(pos, depth - 1, -beta, -alpha,
-                                    ply + 1, nextLastTo, nextLastWasCap, childPV3);
+                                     ply + 1, curFrom, curTo, nextLastTo, nextLastWasCap, childPV3);
                     childPV = childPV3;
                 }
             }
@@ -989,18 +980,21 @@ struct Searcher {
                         killer[1][ply] = killer[0][ply];
                         killer[0][ply] = m;
                     }
-                    int from = from_sq(m), to = to_sq(m);
+
                     int ci = color_index(us);
-                    history[ci][from][to] += depth * depth * 32;
-                    if (history[ci][from][to] > 300000) history[ci][from][to] = 300000;
+
+                    history[ci][curFrom][curTo] += depth * depth * 16;
+                    if (history[ci][curFrom][curTo] > 300000) history[ci][curFrom][curTo] = 300000;
+
+                    if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u) {
+                        countermove[prevFrom][prevTo] = m;
+                        int &ch = contHist[ci][prevFrom][prevTo][curFrom][curTo];
+                        ch += depth * depth * 24;
+                        if (ch > 400000) ch = 400000;
+                    }
                 }
                 break;
             }
-        }
-
-        if (!foundLegal) {
-            if (inCheck) return -MATE + ply;
-            return 0;
         }
 
         pv = bestPV;
@@ -1019,26 +1013,28 @@ struct Searcher {
         return bestScore;
     }
 
-    std::vector<Move> pv_from_tt(Position& pos, int maxLen);
-
     Result think(Position& pos, const Limits& lim, bool emitInfo) {
         keyPly = 0;
-        keyStack[keyPly++] = key_of(pos);
+        keyStack[keyPly++] = pos.zobKey;
 
         Result res{};
         nodes = 0;
+        nodes_batch = 0;
         selDepth = 0;
 
         const int maxDepth = (lim.depth > 0 ? lim.depth : 64);
         const int64_t startT = now_ms();
+        int lastFlushMs = 0;
 
         std::vector<Move> rootMoves;
         movegen::generate_legal(pos, rootMoves);
 
         if (rootMoves.empty()) {
-            res.bestMove = 0;
-            res.score = 0;
-            res.nodes = nodes;
+            flush_nodes_batch();
+            res.bestMove   = 0;
+            res.ponderMove = 0;   // ✅
+            res.score      = 0;
+            res.nodes      = nodes;
             return res;
         }
 
@@ -1049,21 +1045,24 @@ struct Searcher {
         constexpr int PV_MAX = 128;
         constexpr int ROOT_ORDER_K = 10;
 
+        // ✅✅✅ 正确 nodes/nps：nodesAll = global + 本线程余数 nodes_batch
         auto now_time_nodes_nps = [&]() {
             int t = (int)(now_ms() - startT);
             if (t < 1) t = 1;
 
-            uint64_t nodesAll = g_nodes_total.load(std::memory_order_relaxed);
-            uint64_t nps = (nodesAll * 1000ULL) / (uint64_t)t;
+            uint64_t nodesAll =
+                g_nodes_total.load(std::memory_order_relaxed) + nodes_batch;
 
-            return std::tuple<int, uint64_t, uint64_t>(t, nps, nodesAll);
+            uint64_t npsAll = (nodesAll * 1000ULL) / (uint64_t)t;
+
+            return std::tuple<int, uint64_t, uint64_t>(t, npsAll, nodesAll);
         };
 
         PVLine rootPV;
 
         auto root_search = [&](int d, int alpha, int beta,
-                               Move& outBestMove, int& outBestScore,
-                               PVLine& outPV, bool& outOk) {
+                            Move& outBestMove, int& outBestScore,
+                            PVLine& outPV, bool& outOk) {
             outOk = true;
 
             int curAlpha = alpha;
@@ -1085,11 +1084,6 @@ struct Searcher {
 
                 Undo u = pos.do_move(m);
 
-                if (attacks::in_check(pos, flip_color(pos.side))) {
-                    pos.undo_move(m, u);
-                    continue;
-                }
-
                 rootLegalsSearched++;
 
                 bool givesCheck = false;
@@ -1097,15 +1091,13 @@ struct Searcher {
                     givesCheck = attacks::in_check(pos, pos.side);
                 }
 
-                const bool isQuiet  = (!isCap && !isPromo && !givesCheck);
-
                 const int  nextLastTo     = to_sq(m);
                 const bool nextLastWasCap = isCap;
 
                 int score = -INF;
 
                 int r = 0;
-                if (isQuiet && d >= 6 && i >= 4) {
+                if (!isCap && !isPromo && !givesCheck && d >= 6 && i >= 4) {
                     r = 1;
                     if (d >= 10 && i >= 10) r = 2;
                     r = std::min(r, d - 2);
@@ -1113,17 +1105,23 @@ struct Searcher {
 
                 PVLine childPV;
 
+                const int curFrom = from_sq(m);
+                const int curTo   = to_sq(m);
+
                 if (rootLegalsSearched == 1) {
-                    score = -negamax(pos, d - 1, -curBeta, -curAlpha, 1, nextLastTo, nextLastWasCap, childPV);
+                    score = -negamax(pos, d - 1, -curBeta, -curAlpha,
+                                    1, curFrom, curTo, nextLastTo, nextLastWasCap, childPV);
                 } else {
                     int rd = (d - 1) - r;
                     if (rd < 0) rd = 0;
 
-                    score = -negamax(pos, rd, -curAlpha - 1, -curAlpha, 1, nextLastTo, nextLastWasCap, childPV);
+                    score = -negamax(pos, rd, -curAlpha - 1, -curAlpha,
+                                    1, curFrom, curTo, nextLastTo, nextLastWasCap, childPV);
 
                     if (score > curAlpha && score < curBeta) {
                         PVLine childPV2;
-                        score = -negamax(pos, d - 1, -curBeta, -curAlpha, 1, nextLastTo, nextLastWasCap, childPV2);
+                        score = -negamax(pos, d - 1, -curBeta, -curAlpha,
+                                        1, curFrom, curTo, nextLastTo, nextLastWasCap, childPV2);
                         childPV = childPV2;
                     }
                 }
@@ -1164,7 +1162,7 @@ struct Searcher {
 
             std::vector<int> order(rootMoves.size());
             for (int i = 0; i < (int)rootMoves.size(); i++)
-                order[i] = move_score(pos, rootMoves[i], bestMove, 0);
+                order[i] = move_score(pos, rootMoves[i], bestMove, 0, -1, -1);
 
             const int K = std::min<int>(ROOT_ORDER_K, (int)rootMoves.size());
             for (int i = 0; i < K; i++) {
@@ -1224,87 +1222,36 @@ struct Searcher {
                     std::cout << move_to_uci(pm) << " ";
                 }
                 std::cout << "\n";
-                std::cout.flush();
+
+                int curMs = t;
+                if (d <= 2 || curMs - lastFlushMs >= 50) {
+                    std::cout.flush();
+                    lastFlushMs = curMs;
+                }
             }
         }
+
+        // ✅ 一定 flush 余数（不会重复）
+        flush_nodes_batch();
 
         res.bestMove = bestMove;
         res.score = bestScore;
         res.nodes = nodes;
+
+        // ✅✅✅ ponderMove = PV[1]（即 rootPV 第二手）
+        res.ponderMove = (rootPV.len >= 2 ? rootPV.m[1] : 0);
+
         return res;
     }
+
 };
 
 // =====================================
-// pv_from_tt (debug)
-// =====================================
-inline std::vector<Move> search::Searcher::pv_from_tt(Position& pos, int maxLen) {
-    std::vector<Move> pv;
-    pv.reserve(maxLen);
-
-    Undo undos[128];
-    Move umoves[128];
-    int ucnt = 0;
-
-    uint64_t seen[128];
-    int seenN = 0;
-
-    auto seen_before = [&](uint64_t k) {
-        for (int i = 0; i < seenN; i++) if (seen[i] == k) return true;
-        return false;
-    };
-
-    Move prev = 0;
-
-    for (int i = 0; i < maxLen; i++) {
-        const uint64_t key = key_of(pos);
-
-        if (seen_before(key)) break;
-        if (seenN < 128) seen[seenN++] = key;
-
-        TTEntry te{};
-        if (!stt->probe_copy(key, te)) break;
-
-        Move m = te.best;
-        if (!m) break;
-
-        if (!is_legal_move_here(pos, m)) break;
-
-        if (prev &&
-            from_sq(m) == to_sq(prev) &&
-            to_sq(m) == from_sq(prev) &&
-            promo_of(m) == 0 && promo_of(prev) == 0) {
-            break;
-        }
-
-        umoves[ucnt] = m;
-        undos[ucnt]  = pos.do_move(m);
-        ucnt++;
-
-        if (attacks::in_check(pos, flip_color(pos.side))) {
-            pos.undo_move(m, undos[--ucnt]);
-            break;
-        }
-
-        pv.push_back(m);
-        prev = m;
-    }
-
-    for (int i = ucnt - 1; i >= 0; i--) {
-        pos.undo_move(umoves[i], undos[i]);
-    }
-
-    return pv;
-}
-
-// =====================================
-// THREADS (Lazy SMP) — shared TT (NO recursion)
+// THREADS (Lazy SMP) — shared TT
 // =====================================
 inline std::atomic<int> g_threads{1};
 inline int g_hash_mb = 64;
 
-// ✅ global shared zobrist + TT
-inline Zobrist g_zob;
 inline std::unique_ptr<SharedTT> g_shared_tt;
 
 inline std::vector<std::unique_ptr<Searcher>> g_pool_owner;
@@ -1315,19 +1262,17 @@ inline int threads() {
 }
 
 inline void ensure_pool() {
-    // 只负责“确保 shared_tt 存在”和“至少有 1 个 searcher”
     if (!g_shared_tt) {
         g_shared_tt = std::make_unique<SharedTT>();
         g_shared_tt->resize_mb(std::max(1, g_hash_mb));
     }
 
     if (g_pool.empty()) {
-        // 直接创建 1 线程池，不调用 set_threads，避免递归
         g_pool_owner.clear();
         g_pool.clear();
 
         g_pool_owner.emplace_back(std::make_unique<Searcher>());
-        g_pool_owner.back()->bind(g_shared_tt.get(), &g_zob);
+        g_pool_owner.back()->bind(g_shared_tt.get());
         g_pool.push_back(g_pool_owner.back().get());
 
         g_threads.store(1, std::memory_order_relaxed);
@@ -1335,7 +1280,7 @@ inline void ensure_pool() {
 }
 
 inline void set_threads(int n) {
-    ensure_pool(); // 这里 safe：ensure_pool 不会反调 set_threads 了
+    ensure_pool();
 
     n = std::max(1, std::min(256, n));
     g_threads.store(n, std::memory_order_relaxed);
@@ -1347,7 +1292,7 @@ inline void set_threads(int n) {
 
     for (int i = 0; i < n; i++) {
         g_pool_owner.emplace_back(std::make_unique<Searcher>());
-        g_pool_owner.back()->bind(g_shared_tt.get(), &g_zob);
+        g_pool_owner.back()->bind(g_shared_tt.get());
         g_pool.push_back(g_pool_owner.back().get());
     }
 }
@@ -1364,6 +1309,7 @@ inline Result think(Position& pos, const Limits& lim) {
     int n = threads();
     if (n <= 1) {
         Result r = g_pool[0]->think(pos, lim, true);
+        // ✅ 全局已经包含 flush 过的余数
         r.nodes = g_nodes_total.load(std::memory_order_relaxed);
         return r;
     }
@@ -1397,6 +1343,5 @@ inline void clear_tt() {
     ensure_pool();
     g_shared_tt->clear();
 }
-
 
 } // namespace search

@@ -211,12 +211,16 @@ static inline bool pawn_promo_by_move(Color side, int fromSq, int toSq) {
 // Stockfish-like swap SEE
 // returns net material gain for side to move in pos making move m
 // ============================================================
+// ============================================================
+// Correct swap SEE (Stockfish-style, mailbox attackers recompute)
+// returns net gain for side to move if it plays m
+// ============================================================
 static inline int see_full(const Position& pos, Move m) {
     if (!m) return 0;
-    if (flags_of(m) & MF_CASTLE) return 0; // SEE 不处理 castle
+    if (flags_of(m) & MF_CASTLE) return 0;
 
-    int from = from_sq(m);
-    int to   = to_sq(m);
+    const int from = from_sq(m);
+    const int to   = to_sq(m);
     if ((unsigned)from >= 64u || (unsigned)to >= 64u) return 0;
 
     Piece board[64];
@@ -227,23 +231,16 @@ static inline int see_full(const Position& pos, Move m) {
 
     const Color us = pos.side;
 
-    // 初始“被吃子”价值（EP 特判）
+    // ---- value of initially captured piece (EP special) ----
     int capturedV = 0;
     if (flags_of(m) & MF_EP) {
-        capturedV = 100;
+        capturedV = piece_value_pt(PAWN);
     } else {
         capturedV = piece_value(board[to]);
     }
 
-    // 升变 bonus：被吃子价值 + (升变后价值 - 兵价值)
-    int pr = promo_of(m);
-    if (pr) {
-        PieceType ppt = promo_to_pt(pr);
-        capturedV += (piece_value_pt(ppt) - piece_value_pt(PAWN));
-    }
-
-    // 先在 board 上执行“初始吃子”
-    // 1) remove captured
+    // ---- apply the initial capture on a copy board ----
+    // remove captured
     if (flags_of(m) & MF_EP) {
         int capSq = (us == WHITE) ? (to - 8) : (to + 8);
         if (on_board(capSq)) board[capSq] = NO_PIECE;
@@ -251,66 +248,83 @@ static inline int see_full(const Position& pos, Move m) {
         board[to] = NO_PIECE;
     }
 
-    // 2) move piece (handle promotion -> promoted piece)
+    // move attacker (handle promotion)
+    int pr = promo_of(m);
     board[from] = NO_PIECE;
-    Piece newMover = mover;
-    if (pr) {
-        newMover = make_piece(us, promo_to_pt(pr));
-    }
-    board[to] = newMover;
 
-    // swap list
+    Piece placed = mover;
+    if (pr) {
+        placed = make_piece(us, promo_to_pt(pr));
+        // promotion increases what the opponent wins when recapturing this piece
+        // (handled below by "value of piece on to" = placed's value)
+    }
+    board[to] = placed;
+
+    // ---- swap list ----
+    // gain[0] is what we won by the initial capture
     int gain[32];
+    int d = 0;
     gain[0] = capturedV;
 
-    Color side = ~us; // 对方开始回吃
-    int d = 0;
+    // Now opponent tries to recapture on `to`
+    Color side = (us == WHITE ? BLACK : WHITE);
 
-    // 交换循环
-    for (;;) {
-        U64 allAtt = attackers_to_sq(board, to);
-        U64 attSide = color_attackers(allAtt, board, side);
+    // The piece currently sitting on `to` (the one to be captured next)
+    Piece onTo = board[to];
+
+    while (true) {
+        // find all attackers to `to` for current side
+        U64 allAtt   = attackers_to_sq(board, to);
+        U64 attSide  = color_attackers(allAtt, board, side);
         if (!attSide) break;
 
+        // pick least valuable attacker square
         int aSq = least_valuable_attacker_sq(attSide, board);
         if (aSq < 0) break;
 
         Piece aPiece = board[aSq];
-        int aVal = piece_value(aPiece);
 
-        // 如果是“兵回吃到最后一排”，按默认升后计成本（更像鳕鱼）
-        if (type_of(aPiece) == PAWN && pawn_promo_by_move(side, aSq, to)) {
-            aVal = piece_value_pt(QUEEN);
+        // the value captured this ply is the value of the piece currently on `to`
+        int capVal = piece_value(onTo);
+
+        // If current side captures with a pawn onto last rank, assume it promotes to queen
+        bool promoCap = (type_of(aPiece) == PAWN && pawn_promo_by_move(side, aSq, to));
+        if (promoCap) {
+            // the capturing pawn becomes a queen on `to`,
+            // BUT the captured value is still the piece on `to` (capVal already correct).
+            // Next ply, the opponent will be capturing a queen (handled by onTo update).
         }
 
         d++;
         if (d >= 31) break;
-        gain[d] = aVal - gain[d - 1];
 
-        // 小加速：如果当前层已经明显不可能改善，可以提前停（经典剪枝）
-        // 这个会略微加速 SEE，但不改变正确性太多（和鳕鱼思路一致）
-        if (std::max(-gain[d - 1], gain[d]) < 0) break;
+        // standard SEE recurrence: gain[d] = capVal - gain[d-1]
+        gain[d] = capVal - gain[d - 1];
 
-        // 在 board 上执行“回吃”：aSq -> to
-        board[to] = aPiece;
+        // apply capture aSq -> to on board
         board[aSq] = NO_PIECE;
+        board[to]  = aPiece;
 
-        // 如果发生升变回吃（兵到最后一排），把棋子变成后（默认）
-        if (type_of(aPiece) == PAWN && pawn_promo_by_move(side, aSq, to)) {
+        // handle promotion on the board (default to queen)
+        if (promoCap) {
             board[to] = make_piece(side, QUEEN);
         }
 
-        side = ~side;
+        // update onTo: now the piece on `to` is what the other side would capture next
+        onTo = board[to];
+
+        // switch side
+        side = (side == WHITE ? BLACK : WHITE);
     }
 
-    // 反向极大极小
+    // ---- backward induction ----
     for (int i = d - 1; i >= 0; --i) {
-        gain[i] = -std::max(-gain[i], gain[i + 1]);
+        gain[i] = std::max(gain[i], -gain[i + 1]);
     }
+
     return gain[0];
 }
 
-// 阈值版本：用于剪枝更狠（推荐在 qsearch / move ordering 用这个）
 static inline bool see_ge(const Position& pos, Move m, int threshold) {
     return see_full(pos, m) >= threshold;
 }
