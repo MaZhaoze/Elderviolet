@@ -56,13 +56,20 @@ To use the engine, connect it to a chess GUI such as:
 
 ## Features
 
-* Alpha-Beta pruning
-* Iterative Deepening
-* Transposition Table
-* Move Ordering
-* Static Exchange Evaluation (SEE)
-* UCI Protocol support
-
+- ✔ PVS
+- ✔ LMR
+- ✔ Null Move Pruning
+- ✔ Reverse Futility Pruning
+- ✔ Futility Pruning
+- ✔ Razor
+- ✔ Mate Distance Pruning
+- ✔ SEE + SEE full fallback
+- ✔ Capture SEE prune
+- ✔ Late Move Pruning
+- ✔ TT + mate score 
+- ✔ Killer + History
+- ✔ Aspiration Window
+- ✔ Lazy SMP
 ---
 
 ## Project Structure
