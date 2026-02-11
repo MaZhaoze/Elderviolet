@@ -1,0 +1,13 @@
+# Build files
+*.exe
+*.zip
+
+# VSCode
+.vscode/
+
+# Object files
+*.o
+*.obj
+
+# Logs
+*.log
