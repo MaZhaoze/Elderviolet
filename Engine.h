@@ -101,16 +101,17 @@ public:
     // depth: >0 表示用户强制深度；<=0 表示未给 depth（time-based）
     // movetime: >0 表示用户强制时长；<=0 表示未给 movetime（用 wtime/btime 算）
     int go(int depth,
-           int movetime,
-           bool infinite,
-           int wtime, int btime,
-           int winc, int binc,
-           int movestogo)
+       int movetime,
+       bool infinite,
+       int wtime, int btime,
+       int winc, int binc,
+       int movestogo)
     {
         search::Limits lim{};
 
         const bool depth_given    = (depth > 0);
         const bool movetime_given = (movetime > 0);
+        const bool hasClock       = (wtime >= 0 || btime >= 0 || winc > 0 || binc > 0 || movestogo > 0);
 
         // 1) infinite：无限思考（靠 stop 停）
         if (infinite) {
@@ -125,13 +126,17 @@ public:
         }
 
         // 2) 计算本步可用时间（ms）
+        // ✅ 核心修复：
+        // - go depth N 且没有任何时钟/时间参数 => 纯深度搜索，不启用 time_up（movetime_ms=0）
+        // - go movetime => 用满 movetime
+        // - go wtime/btime/... 且未给 depth => 按时钟算时间
         int t_ms = 0;
 
         if (movetime_given) {
-            // ✅ 关键：movetime 就是“给多少用多少”，不要扣 Move Overhead
+            // movetime 就是“给多少用多少”，不要扣 Move Overhead
             t_ms = std::max(1, movetime);
-        } else {
-            // ✅ 只有 wtime/btime 才需要 overhead
+        } else if (!depth_given && hasClock) {
+            // 只有 clock 模式才计算可用时间（并扣 overhead）
             int myTime = (pos.side == WHITE ? wtime : btime);
             int myInc  = (pos.side == WHITE ? winc  : binc);
 
@@ -140,25 +145,28 @@ public:
 
             t_ms = compute_think_ms(myTime, myInc, movestogo, move_overhead_ms_);
             if (t_ms < 1) t_ms = 1;
+        } else {
+            // 纯 depth 模式（或 plain go 且无 clock）：不启用 time_up
+            t_ms = 0;
         }
 
         lim.infinite = false;
         lim.movetime_ms = t_ms;
 
         // 3) depth 策略
-        // - 用户给 depth：按 depth（但仍受 movetime 限制，谁先到谁停）
+        // - 用户给 depth：按 depth（若同时也给了 movetime/clock，则谁先到谁停）
         // - 用户没给 depth：lim.depth=0 -> Search.h 默认 64（不再卡 14）
         lim.depth = depth_given ? depth : 0;
 
         // 4) Skill Level：只在 skill<20 且用户没给 depth 时弱化
-        //    ✅ 注意：即使弱化，也不改变“movetime=1000 用满”的语义 —— 只在非 movetime_given 时缩短时间
+        //    ✅ 注意：即使弱化，也不改变“movetime=xxx 用满”的语义 —— 只在 clock 模式缩短时间
         if (!depth_given && skill_level_ < 20) {
             int capDepth = 4 + skill_level_ / 2;   // 0..19 -> 4..13
             capDepth = std::max(1, std::min(64, capDepth));
             lim.depth = capDepth;
 
-            // ✅ 只在不是 movetime_given（也就是 clock 模式）时缩短用时
-            if (!movetime_given) {
+            // ✅ 只在 clock 模式（非 movetime_given）时缩短用时
+            if (!movetime_given && hasClock) {
                 int factor = 40 + (skill_level_ * 50) / 19; // 40..90
                 lim.movetime_ms = std::max(1, (lim.movetime_ms * factor) / 100);
             }
@@ -167,6 +175,7 @@ public:
         search::Result res = search::think(pos, lim);
         return (int)res.bestMove;
     }
+
 
     // ===== move->uci =====
     std::string move_to_uci(int m) const { return move_to_uci((Move)m); }

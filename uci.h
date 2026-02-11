@@ -113,7 +113,7 @@ static inline int compute_think_time_ms_uci(
 // UCI: output header
 // =====================
 static inline void uci_id(const Engine&) {
-    std::cout << "id name DraconiPro 1.0\n";
+    std::cout << "id name Elderviolet-avx2 1.0\n";
     std::cout << "id author Magnus\n";
     std::cout << "option name Threads type spin default 1 min 1 max 256\n";
     std::cout << "option name Hash type spin default 64 min 1 max 4096\n";
@@ -125,7 +125,6 @@ static inline void uci_id(const Engine&) {
     std::cout << "uciok\n";
     std::cout.flush();
 }
-
 
 static inline void cmd_isready() {
     std::cout << "readyok\n";
@@ -161,51 +160,56 @@ static inline void cmd_setoption(const std::vector<std::string>& tokens, Engine&
         }
     }
 
-    if (name == "Hash") {
+    // normalize option name (case-insensitive)
+    const std::string lname = to_lower(name);
+
+    if (lname == "hash") {
         int mb = to_int_safe(value, 64);
         mb = clampi(mb, 1, 4096);
         engine.set_hash(mb);
         return;
     }
 
-    if (name == "Threads") {
+    if (lname == "threads") {
         int n = to_int_safe(value, 1);
         n = clampi(n, 1, 256);
         engine.set_threads(n);
         return;
     }
 
-    if (name == "MultiPV") {
+    if (lname == "multipv") {
         int n = to_int_safe(value, 1);
         n = clampi(n, 1, 10);
         engine.set_multipv(n);
         return;
     }
 
-    if (name == "Ponder") {
+    if (lname == "ponder") {
         bool b = to_bool_safe(value, false);
         engine.set_ponder(b);
         return;
     }
 
-    if (name == "Move Overhead") {
+    if (lname == "move overhead") {
         int ms = to_int_safe(value, 30);
         ms = clampi(ms, 0, 5000);
         engine.set_move_overhead(ms);
         return;
     }
 
-    if (name == "SyzygyPath") {
+    if (lname == "syzygypath") {
         engine.set_syzygy_path(value);
         return;
     }
 
-    if (name == "Skill Level") {
+    if (lname == "skill level") {
         int lv = to_int_safe(value, 20);
         lv = clampi(lv, 0, 20);
         engine.set_skill_level(lv);
         return;
     }
+
+    // unknown options are ignored per UCI convention
 }
 
 static inline void cmd_position(const std::vector<std::string>& tokens, Engine& engine) {
@@ -274,11 +278,25 @@ static inline void cmd_go(const std::vector<std::string>& tokens, Engine& engine
         }
     }
 
+    // ✅ UCI priority:
+    // depth given -> fixed depth search
+    // movetime or clocks given -> time-managed search
+    // infinite -> run until stop
+    //
+    // So: DO NOT override depth here.
+
+    // Optional: if user sends plain "go" with nothing, give a sane default.
+    const bool hasClock = (wtime >= 0 || btime >= 0 || winc > 0 || binc > 0 || movestogo > 0);
+    if (depth < 0 && movetime < 0 && !infinite && !hasClock) {
+        movetime = 1000; // default 1s if you want; or leave as -1 and let Engine decide
+    }
+
     int bestMove = engine.go(depth, movetime, infinite, wtime, btime, winc, binc, movestogo);
 
     std::cout << "bestmove " << engine.move_to_uci(bestMove) << "\n";
     std::cout.flush();
 }
+
 
 // =====================
 // main loop

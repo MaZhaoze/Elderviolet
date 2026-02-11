@@ -10,6 +10,7 @@
 #include <thread>
 #include <memory>
 #include <tuple>
+#include <mutex>
 
 #include "types.h"
 #include "Position.h"
@@ -31,7 +32,7 @@ inline bool is_black_piece_s(Piece p) {
 }
 
 // =====================
-// time management (旧函数保留，你现在的 Engine 侧已经重写过更好的 time split)
+// time management
 // =====================
 static inline int compute_think_time_ms(int mytime_ms, int myinc_ms, int movestogo) {
     if (mytime_ms <= 0) return -1;
@@ -95,7 +96,6 @@ struct SearchInfo {
     int hashfull = 0;   // 0..1000
 };
 
-// 这两个保持原样（selDepth 每线程各自维护）
 inline int selDepth = 0;
 inline std::chrono::steady_clock::time_point startTime;
 
@@ -106,7 +106,7 @@ static constexpr int INF  = 30000;
 static constexpr int MATE = 29000;
 
 // =====================================
-// Color helpers (禁止 ~color)
+// Color helpers
 // =====================================
 inline Color flip_color(Color c) {
     return (c == WHITE) ? BLACK : WHITE;
@@ -120,8 +120,6 @@ inline int color_index(Color c) {
 // =====================================
 inline std::atomic<bool>    g_stop{false};
 inline std::atomic<int64_t> g_endTimeMs{0};
-
-// 全线程合计节点数（鳕鱼味 nodes/nps）
 inline std::atomic<uint64_t> g_nodes_total{0};
 
 inline int64_t now_ms() {
@@ -311,26 +309,80 @@ inline int hashfull_permille_fallback(const TT& tt) {
 }
 
 // =====================================
+// ✅ Shared TT (thread-safe)
+// =====================================
+struct SharedTT {
+    TT tt;
+
+    static constexpr int LOCKS = 4096; // power of two
+    std::vector<std::mutex> locks;
+
+    SharedTT() : locks(LOCKS) {}
+
+    inline int lock_index(uint64_t key) const {
+        return int((key ^ (key >> 32)) & (LOCKS - 1));
+    }
+
+    inline bool probe_copy(uint64_t key, TTEntry& out) {
+        std::lock_guard<std::mutex> g(locks[lock_index(key)]);
+        TTEntry* e = tt.probe(key);
+        if (!e || e->key != key) return false;
+        out = *e;
+        return true;
+    }
+
+    inline void store(uint64_t key, Move best, int16_t score, int16_t depth, uint8_t flag) {
+        std::lock_guard<std::mutex> g(locks[lock_index(key)]);
+        TTEntry* e = tt.probe(key);
+        if (!e) return;
+
+        // deeper wins (simple + stable)
+        if (e->key != key || depth >= e->depth) {
+            e->key   = key;
+            e->best  = best;
+            e->score = score;
+            e->depth = depth;
+            e->flag  = flag;
+        }
+    }
+
+    inline void resize_mb(int mb) { tt.resize_mb(mb); }
+    inline void clear() { for (auto& e : tt.table) e = TTEntry{}; }
+    inline int hashfull_permille() const { return hashfull_permille_fallback(tt); }
+};
+
+// =====================================
 // Searcher
 // =====================================
 struct Searcher {
-    Zobrist zob;
-    TT tt;
+    // ✅ shared resources
+    SharedTT* stt = nullptr;
+    Zobrist*  pzob = nullptr;
 
     Move killer[2][128]{};
     int  history[2][64][64]{};
 
     uint64_t nodes = 0;
 
-    Searcher() { tt.resize_mb(64); }
+    struct PVLine {
+        Move m[128]{};
+        int len = 0;
+    };
 
-    void set_hash_mb(int mb) { tt.resize_mb(std::max(1, mb)); }
+    Searcher() = default;
 
-    void clear_tt() {
-        for (auto& e : tt.table) e = TTEntry{};
+    inline void bind(SharedTT* shared, Zobrist* z) {
+        stt = shared;
+        pzob = z;
     }
 
-    // 统一加点：本线程+全局
+    void set_hash_mb(int) {}
+    void clear_tt() {}
+
+    inline uint64_t key_of(const Position& pos) const {
+        return pzob->key(pos);
+    }
+
     inline void add_node() {
         nodes++;
         g_nodes_total.fetch_add(1, std::memory_order_relaxed);
@@ -353,7 +405,6 @@ struct Searcher {
     };
     std::vector<QNode> plyQList[MAX_PLY];
 
-    // ====== capture / quiet ======
     inline bool is_capture(const Position& pos, Move m) {
         if (flags_of(m) & MF_EP) return true;
         int to = to_sq(m);
@@ -364,7 +415,6 @@ struct Searcher {
         return !is_capture(pos, m) && promo_of(m) == 0;
     }
 
-    // ====== MVV-LVA ======
     inline int mvv_lva(Piece victim, Piece attacker) {
         static const int V[7] = {0,100,320,330,500,900,0};
         int vv = (victim == NO_PIECE) ? 0 : V[type_of(victim)];
@@ -372,7 +422,6 @@ struct Searcher {
         return vv * 10 - aa;
     }
 
-    // ====== simple SEE ======
     inline int see(const Position& pos, Move m) {
         int from = from_sq(m);
         int to   = to_sq(m);
@@ -391,14 +440,12 @@ struct Searcher {
         return vv - av;
     }
 
-    // ====== move ordering ======
     inline int move_score(const Position& pos, Move m, Move ttMove, int ply) {
         ply = std::min(ply, 127);
 
         if (m == ttMove) return 1000000000;
 
         int from = from_sq(m), to = to_sq(m);
-
         Piece mover = pos.board[from];
 
         int sc = 0;
@@ -409,7 +456,6 @@ struct Searcher {
         if (is_capture(pos, m)) {
             sc += 50000000;
 
-            // victim (EP fixes)
             Piece victim = pos.board[to];
             if (flags_of(m) & MF_EP)
                 victim = make_piece(flip_color(pos.side), PAWN);
@@ -467,78 +513,6 @@ struct Searcher {
         }
     }
 
-    // =====================================
-    // PV build (SAFE)  — 你现在没直接用，保留
-    // =====================================
-    inline std::vector<Move> build_pv_safe(Position pos, Move firstMove, int maxLen = 32) {
-        std::vector<Move> pv;
-        pv.reserve(maxLen);
-
-        if (!move_exists_pseudo(pos, firstMove)) return pv;
-        if (!is_move_legal_fast(pos, firstMove)) return pv;
-
-        uint64_t seen[128];
-        int seenN = 0;
-
-        auto seen_before = [&](uint64_t k) {
-            for (int i = 0; i < seenN; i++)
-                if (seen[i] == k) return true;
-            return false;
-        };
-
-        seen[seenN++] = zob.key(pos);
-
-        Move cur = firstMove;
-
-        for (int i = 0; i < maxLen; i++) {
-            if (!move_exists_pseudo(pos, cur)) break;
-            if (!is_move_legal_fast(pos, cur)) break;
-
-            if (!pv.empty()) {
-                Move prev = pv.back();
-                if (from_sq(cur) == to_sq(prev) && to_sq(cur) == from_sq(prev) &&
-                    promo_of(cur) == 0 && promo_of(prev) == 0) {
-                    break;
-                }
-            }
-
-            pv.push_back(cur);
-
-            Color us = pos.side;
-            Undo u = pos.do_move(cur);
-
-            if (attacks::in_check(pos, us)) {
-                pos.undo_move(cur, u);
-                pv.pop_back();
-                break;
-            }
-
-            uint64_t key = zob.key(pos);
-
-            if (seen_before(key)) {
-                pos.undo_move(cur, u);
-                pv.pop_back();
-                break;
-            }
-            if (seenN < 128) seen[seenN++] = key;
-
-            TTEntry* e = tt.probe(key);
-            if (!e || e->key != key || !e->best) break;
-
-            Move nm = e->best;
-
-            if (!move_exists_pseudo(pos, nm)) break;
-            if (!is_move_legal_fast(pos, nm)) break;
-
-            cur = nm;
-        }
-
-        return pv;
-    }
-
-    // =====================================
-    // qsearch (with recapture priority)
-    // =====================================
     int qsearch(Position& pos, int alpha, int beta, int ply, int lastTo, bool lastWasCap) {
         add_node();
         selDepth = std::max(selDepth, ply);
@@ -620,7 +594,6 @@ struct Searcher {
             if (cap)   key += 80000;
             key += gain * 300;
 
-            // ✅ Recapture priority
             if (lastWasCap && cap && lastTo >= 0 && to_sq(m) == lastTo) {
                 key += 220000;
             }
@@ -707,10 +680,81 @@ struct Searcher {
         return false;
     }
 
-    // =====================================
-    // negamax (with lastTo/lastWasCap)
-    // =====================================
-    int negamax(Position& pos, int depth, int alpha, int beta, int ply, int lastTo, bool lastWasCap) {
+    static inline bool is_legal_move_here(Position& pos, Move m) {
+        if (!move_sane_basic(pos, m)) return false;
+
+        if (flags_of(m) & MF_CASTLE) {
+            if (!movegen::legal_castle_path_ok(pos, m)) return false;
+        }
+
+        const Color us = pos.side;
+        Undo u = pos.do_move(m);
+        const bool ok = !attacks::in_check(pos, us);
+        pos.undo_move(m, u);
+        return ok;
+    }
+
+    inline void follow_tt_pv(Position& pos, int maxLen, PVLine& out) {
+        out.len = 0;
+        if (maxLen <= 0) return;
+
+        Undo undos[128];
+        Move um[128];
+        int ucnt = 0;
+
+        uint64_t seen[128];
+        int seenN = 0;
+
+        auto seen_before = [&](uint64_t k) {
+            for (int i = 0; i < seenN; i++) if (seen[i] == k) return true;
+            return false;
+        };
+
+        Move prev = 0;
+
+        for (int i = 0; i < maxLen && out.len < 128; i++) {
+            const uint64_t k = key_of(pos);
+
+            if (seen_before(k)) break;
+            if (seenN < 128) seen[seenN++] = k;
+
+            TTEntry te{};
+            if (!stt->probe_copy(k, te)) break;
+
+            Move m = te.best;
+            if (!m) break;
+
+            if (!is_legal_move_here(pos, m)) break;
+
+            if (prev &&
+                from_sq(m) == to_sq(prev) &&
+                to_sq(m) == from_sq(prev) &&
+                promo_of(m) == 0 && promo_of(prev) == 0) {
+                break;
+            }
+
+            um[ucnt] = m;
+            undos[ucnt] = pos.do_move(m);
+            ucnt++;
+
+            if (attacks::in_check(pos, flip_color(pos.side))) {
+                pos.undo_move(m, undos[--ucnt]);
+                break;
+            }
+
+            out.m[out.len++] = m;
+            prev = m;
+
+            if (time_up()) break;
+        }
+
+        for (int i = ucnt - 1; i >= 0; i--) pos.undo_move(um[i], undos[i]);
+    }
+
+    int negamax(Position& pos, int depth, int alpha, int beta,
+                int ply, int lastTo, bool lastWasCap, PVLine& pv) {
+        pv.len = 0;
+
         if (time_up()) return alpha;
 
         add_node();
@@ -721,14 +765,12 @@ struct Searcher {
         const Color us = pos.side;
         const bool inCheck = attacks::in_check(pos, us);
 
-        // Mate distance pruning
         alpha = std::max(alpha, -MATE + ply);
         beta  = std::min(beta,  MATE - ply - 1);
         if (alpha >= beta) return alpha;
 
-        const uint64_t key = zob.key(pos);
+        const uint64_t key = key_of(pos);
 
-        // repetition: 只扫隔 ply
         if (ply > 0) {
             for (int i = keyPly - 2; i >= 0; i -= 2) {
                 if (keyStack[i] == key) return 0;
@@ -738,27 +780,48 @@ struct Searcher {
         keyStack[keyPly++] = key;
         struct KeyPop { int& p; KeyPop(int& x): p(x) {} ~KeyPop(){ p--; } } _kp(keyPly);
 
-        TTEntry* e = tt.probe(key);
-        Move ttMove = 0;
-        if (e && e->key == key) {
-            ttMove = e->best;
+        TTEntry te{};
+        bool ttHit = stt->probe_copy(key, te);
 
-            if (e->depth >= depth) {
-                int ttScore = from_tt_score((int)e->score, ply);
-                if (e->flag == TT_EXACT) return ttScore;
-                if (e->flag == TT_ALPHA && ttScore <= alpha) return alpha;
-                if (e->flag == TT_BETA  && ttScore >= beta)  return beta;
+        Move ttMove = 0;
+        if (ttHit) {
+            ttMove = te.best;
+
+            if (te.depth >= depth) {
+                int ttScore = from_tt_score((int)te.score, ply);
+
+                if (te.flag == TT_EXACT) {
+                    PVLine tmp;
+                    const int maxFollow = std::min(127, std::max(1, depth));
+                    follow_tt_pv(pos, maxFollow, tmp);
+                    pv = tmp;
+                    return ttScore;
+                }
+
+                if (te.flag == TT_ALPHA && ttScore <= alpha) {
+                    if (pv.len == 0 && ttMove && is_legal_move_here(pos, ttMove)) {
+                        pv.m[0] = ttMove;
+                        pv.len  = 1;
+                    }
+                    return alpha;
+                }
+
+                if (te.flag == TT_BETA && ttScore >= beta) {
+                    if (pv.len == 0 && ttMove && is_legal_move_here(pos, ttMove)) {
+                        pv.m[0] = ttMove;
+                        pv.len  = 1;
+                    }
+                    return beta;
+                }
             }
         }
 
-        // Check extension
         if (inCheck) depth++;
 
         if (depth <= 0) return qsearch(pos, alpha, beta, ply, lastTo, lastWasCap);
 
         int staticEval = inCheck ? -INF : eval::evaluate(pos);
 
-        // razor
         if (!inCheck && ply > 0 && depth <= 2) {
             const int razorMargin = (depth == 1 ? 220 : 320);
             if (staticEval + razorMargin <= alpha) {
@@ -766,13 +829,11 @@ struct Searcher {
             }
         }
 
-        // reverse futility (RFP)
         if (!inCheck && depth <= 3 && ply > 0) {
             const int rfpMargin = 120 + 90 * depth;
             if (staticEval - rfpMargin >= beta) return beta;
         }
 
-        // null move pruning
         if (!inCheck && depth >= 3 && ply > 0) {
             if (has_non_pawn_material(pos, us)) {
                 int R = 3 + depth / 6;
@@ -782,8 +843,9 @@ struct Searcher {
                     NullMoveUndo nu;
                     do_null_move(pos, nu);
 
+                    PVLine npv;
                     int score = -negamax(pos, depth - 1 - R, -beta, -beta + 1,
-                                        ply + 1, -1, false);
+                                        ply + 1, -1, false, npv);
 
                     undo_null_move(pos, nu);
 
@@ -813,6 +875,8 @@ struct Searcher {
         Move bestMove = 0;
         const int origAlpha = alpha;
 
+        PVLine bestPV; bestPV.len = 0;
+
         bool foundLegal = false;
         int legalMovesSearched = 0;
         int quietMovesSearched = 0;
@@ -831,19 +895,16 @@ struct Searcher {
             const bool isPromo = (promo_of(m) != 0);
             const bool isQuiet = (!isCap && !isPromo);
 
-            // futility prune (quiet)
             if (!inCheck && isQuiet && ply > 0 && depth <= 2 && m != ttMove) {
                 const int futMargin = (depth == 1) ? 190 : 290;
                 if (staticEval + futMargin <= alpha) continue;
             }
 
-            // late move prune (very shallow)
             if (!inCheck && isQuiet && ply > 0 && depth <= 2 && m != ttMove) {
                 const int limit = (depth == 1) ? 5 : 8;
                 if (quietMovesSearched >= limit) continue;
             }
 
-            // capture SEE prune
             if (!inCheck && isCap && !isPromo && ply > 0 && depth <= 4 && m != ttMove) {
                 int sQ = see(pos, m);
                 if (sQ < -200) {
@@ -856,7 +917,6 @@ struct Searcher {
 
             Undo u = pos.do_move(m);
 
-            // legality
             if (attacks::in_check(pos, us)) {
                 pos.undo_move(m, u);
                 continue;
@@ -870,10 +930,11 @@ struct Searcher {
             const bool nextLastWasCap = isCap;
 
             int score;
+            PVLine childPV;
 
-            // PVS + LMR
             if (legalMovesSearched == 1) {
-                score = -negamax(pos, depth - 1, -beta, -alpha, ply + 1, nextLastTo, nextLastWasCap);
+                score = -negamax(pos, depth - 1, -beta, -alpha,
+                                ply + 1, nextLastTo, nextLastWasCap, childPV);
             } else {
                 int reduction = 0;
                 if (depth >= 3 && !inCheck && isQuiet && ply > 0) {
@@ -887,14 +948,21 @@ struct Searcher {
                 int rd = depth - 1 - reduction;
                 if (rd < 0) rd = 0;
 
-                score = -negamax(pos, rd, -alpha - 1, -alpha, ply + 1, nextLastTo, nextLastWasCap);
+                score = -negamax(pos, rd, -alpha - 1, -alpha,
+                                ply + 1, nextLastTo, nextLastWasCap, childPV);
 
                 if (score > alpha && reduction > 0 && rd != depth - 1) {
-                    score = -negamax(pos, depth - 1, -alpha - 1, -alpha, ply + 1, nextLastTo, nextLastWasCap);
+                    PVLine childPV2;
+                    score = -negamax(pos, depth - 1, -alpha - 1, -alpha,
+                                    ply + 1, nextLastTo, nextLastWasCap, childPV2);
+                    childPV = childPV2;
                 }
 
                 if (score > alpha && score < beta) {
-                    score = -negamax(pos, depth - 1, -beta, -alpha, ply + 1, nextLastTo, nextLastWasCap);
+                    PVLine childPV3;
+                    score = -negamax(pos, depth - 1, -beta, -alpha,
+                                    ply + 1, nextLastTo, nextLastWasCap, childPV3);
+                    childPV = childPV3;
                 }
             }
 
@@ -904,7 +972,13 @@ struct Searcher {
 
             if (score > bestScore) {
                 bestScore = score;
-                bestMove = m;
+                bestMove  = m;
+
+                bestPV.m[0] = m;
+                bestPV.len  = std::min(127, childPV.len + 1);
+                for (int k = 0; k < childPV.len && k + 1 < 128; k++) {
+                    bestPV.m[k + 1] = childPV.m[k];
+                }
             }
 
             if (score > alpha) alpha = score;
@@ -929,8 +1003,9 @@ struct Searcher {
             return 0;
         }
 
-        // store TT (单线程 TT：安全)
-        if (e) {
+        pv = bestPV;
+
+        {
             TTFlag flag = TT_EXACT;
             if (bestScore <= origAlpha) flag = TT_ALPHA;
             else if (bestScore >= beta) flag = TT_BETA;
@@ -938,38 +1013,17 @@ struct Searcher {
             int store = clampi(bestScore, -INF, INF);
             store = to_tt_score(store, ply);
 
-            e->best  = bestMove;
-            e->score = (int16_t)store;
-            e->depth = (int16_t)depth;
-            e->flag  = (uint8_t)flag;
-            e->key   = key;
+            stt->store(key, bestMove, (int16_t)store, (int16_t)depth, (uint8_t)flag);
         }
 
         return bestScore;
     }
 
-    static inline bool is_legal_move_here(Position& pos, Move m) {
-        if (!move_sane_basic(pos, m)) return false;
-
-        if (flags_of(m) & MF_CASTLE) {
-            if (!movegen::legal_castle_path_ok(pos, m)) return false;
-        }
-
-        const Color us = pos.side;
-        Undo u = pos.do_move(m);
-        const bool ok = !attacks::in_check(pos, us);
-        pos.undo_move(m, u);
-        return ok;
-    }
-
     std::vector<Move> pv_from_tt(Position& pos, int maxLen);
 
-    // =====================================
-    // think (emitInfo: only main thread prints)
-    // =====================================
     Result think(Position& pos, const Limits& lim, bool emitInfo) {
         keyPly = 0;
-        keyStack[keyPly++] = zob.key(pos);
+        keyStack[keyPly++] = key_of(pos);
 
         Result res{};
         nodes = 0;
@@ -992,8 +1046,7 @@ struct Searcher {
         int  bestScore = -INF;
 
         constexpr int ASP_START = 35;
-        constexpr int ROOT_EARLY_CUT = 40;
-        constexpr int PV_MAX = 12;
+        constexpr int PV_MAX = 128;
         constexpr int ROOT_ORDER_K = 10;
 
         auto now_time_nodes_nps = [&]() {
@@ -1006,21 +1059,11 @@ struct Searcher {
             return std::tuple<int, uint64_t, uint64_t>(t, nps, nodesAll);
         };
 
-        auto print_currmove = [&](int depth, int sd, Move m, int moveNo) {
-            if (!emitInfo) return;
-            auto [t, nps, nodesAll] = now_time_nodes_nps();
-            std::cout << "info depth " << depth
-                    << " seldepth " << sd
-                    << " time " << t
-                    << " nodes " << nodesAll
-                    << " nps " << nps
-                    << " currmove " << move_to_uci(m)
-                    << " currmovenumber " << moveNo
-                    << "\n";
-            std::cout.flush();
-        };
+        PVLine rootPV;
 
-        auto root_search = [&](int d, int alpha, int beta, Move& outBestMove, int& outBestScore, bool& outOk) {
+        auto root_search = [&](int d, int alpha, int beta,
+                               Move& outBestMove, int& outBestScore,
+                               PVLine& outPV, bool& outOk) {
             outOk = true;
 
             int curAlpha = alpha;
@@ -1028,43 +1071,20 @@ struct Searcher {
 
             Move iterBestMove  = 0;
             int  iterBestScore = -INF;
+            PVLine iterPV; iterPV.len = 0;
 
             int rootLegalsSearched = 0;
-
-            // Stockfish-ish currmove checkpoints (少量)
-            std::vector<int> checkpoints;
-            if (emitInfo && d >= 6) {
-                int n = (int)rootMoves.size();
-                auto add_cp = [&](int idx) {
-                    idx = std::max(0, std::min(n - 1, idx));
-                    if (checkpoints.empty() || checkpoints.back() != idx) checkpoints.push_back(idx);
-                };
-                add_cp(0);
-                add_cp(n / 4);
-                add_cp(n / 2);
-                add_cp((n * 3) / 4);
-                std::sort(checkpoints.begin(), checkpoints.end());
-                checkpoints.erase(std::unique(checkpoints.begin(), checkpoints.end()), checkpoints.end());
-            }
-            int cpPtr = 0;
 
             for (int i = 0; i < (int)rootMoves.size(); i++) {
                 if (time_up()) { outOk = false; break; }
 
                 Move m = rootMoves[i];
 
-                if (cpPtr < (int)checkpoints.size() && i == checkpoints[cpPtr]) {
-                    int sd = std::max(1, selDepth);
-                    print_currmove(d, sd, m, i + 1);
-                    cpPtr++;
-                }
-
                 const bool isCap   = is_capture(pos, m) || (flags_of(m) & MF_EP);
                 const bool isPromo = (promo_of(m) != 0);
 
                 Undo u = pos.do_move(m);
 
-                // root safety
                 if (attacks::in_check(pos, flip_color(pos.side))) {
                     pos.undo_move(m, u);
                     continue;
@@ -1091,21 +1111,20 @@ struct Searcher {
                     r = std::min(r, d - 2);
                 }
 
+                PVLine childPV;
+
                 if (rootLegalsSearched == 1) {
-                    score = -negamax(pos, d - 1, -curBeta, -curAlpha, 1, nextLastTo, nextLastWasCap);
+                    score = -negamax(pos, d - 1, -curBeta, -curAlpha, 1, nextLastTo, nextLastWasCap, childPV);
                 } else {
                     int rd = (d - 1) - r;
                     if (rd < 0) rd = 0;
 
-                    score = -negamax(pos, rd, -curAlpha - 1, -curAlpha, 1, nextLastTo, nextLastWasCap);
-
-                    //if (isQuiet && i >= 6 && score <= curAlpha - ROOT_EARLY_CUT) {
-                    //    pos.undo_move(m, u);
-                    //    continue;
-                    //}
+                    score = -negamax(pos, rd, -curAlpha - 1, -curAlpha, 1, nextLastTo, nextLastWasCap, childPV);
 
                     if (score > curAlpha && score < curBeta) {
-                        score = -negamax(pos, d - 1, -curBeta, -curAlpha, 1, nextLastTo, nextLastWasCap);
+                        PVLine childPV2;
+                        score = -negamax(pos, d - 1, -curBeta, -curAlpha, 1, nextLastTo, nextLastWasCap, childPV2);
+                        childPV = childPV2;
                     }
                 }
 
@@ -1116,6 +1135,12 @@ struct Searcher {
                 if (score > iterBestScore) {
                     iterBestScore = score;
                     iterBestMove  = m;
+
+                    iterPV.m[0] = m;
+                    iterPV.len = std::min(127, childPV.len + 1);
+                    for (int k = 0; k < childPV.len && k + 1 < 128; k++) {
+                        iterPV.m[k + 1] = childPV.m[k];
+                    }
                 }
 
                 if (score > curAlpha) curAlpha = score;
@@ -1126,6 +1151,7 @@ struct Searcher {
 
             outBestMove  = iterBestMove;
             outBestScore = iterBestScore;
+            outPV        = iterPV;
         };
 
         for (int d = 1; d <= maxDepth; d++) {
@@ -1142,8 +1168,7 @@ struct Searcher {
 
             const int K = std::min<int>(ROOT_ORDER_K, (int)rootMoves.size());
             for (int i = 0; i < K; i++) {
-                int bi = i;
-                int bs = order[i];
+                int bi = i, bs = order[i];
                 for (int j = i + 1; j < (int)rootMoves.size(); j++) {
                     if (order[j] > bs) { bs = order[j]; bi = j; }
                 }
@@ -1159,48 +1184,31 @@ struct Searcher {
 
             Move localBestMove  = bestMove;
             int  localBestScore = bestScore;
+            PVLine localPV; localPV.len = 0;
             bool ok = false;
 
-            root_search(d, alpha, beta, localBestMove, localBestScore, ok);
+            root_search(d, alpha, beta, localBestMove, localBestScore, localPV, ok);
             if (!ok) break;
 
             if (useAsp && (localBestScore <= alpha || localBestScore >= beta)) {
                 alpha = -INF;
                 beta  =  INF;
-                root_search(d, alpha, beta, localBestMove, localBestScore, ok);
+                root_search(d, alpha, beta, localBestMove, localBestScore, localPV, ok);
                 if (!ok) break;
             }
 
             bestMove  = localBestMove;
             bestScore = localBestScore;
-
-            std::vector<Move> pv;
-            pv.reserve(PV_MAX);
-
-            if (bestMove) {
-                pv.push_back(bestMove);
-                if ((int)pv.size() < PV_MAX) {
-                    Undo u = pos.do_move(bestMove);
-                    auto tail = pv_from_tt(pos, PV_MAX - 1);
-                    pos.undo_move(bestMove, u);
-
-                    for (Move tm : tail) {
-                        if (!tm) break;
-                        pv.push_back(tm);
-                        if ((int)pv.size() >= PV_MAX) break;
-                    }
-                }
-            }
+            rootPV    = localPV;
 
             if (emitInfo) {
                 auto [t, nps, nodesAll] = now_time_nodes_nps();
-                int hashfull = hashfull_permille_fallback(tt);
+                int hashfull = stt->hashfull_permille();
                 int sd = std::max(1, selDepth);
 
                 std::cout << "info depth " << d
                         << " seldepth " << sd
-                        << " multipv 1"
-                        << " ";
+                        << " multipv 1 ";
                 print_score_uci(bestScore);
                 std::cout << " nodes " << nodesAll
                         << " nps " << nps
@@ -1209,8 +1217,11 @@ struct Searcher {
                         << " time " << t
                         << " pv ";
 
-                for (Move pm : pv) {
-                    if (pm) std::cout << move_to_uci(pm) << " ";
+                int outN = std::min(PV_MAX, rootPV.len);
+                for (int i = 0; i < outN; i++) {
+                    Move pm = rootPV.m[i];
+                    if (!pm) break;
+                    std::cout << move_to_uci(pm) << " ";
                 }
                 std::cout << "\n";
                 std::cout.flush();
@@ -1225,14 +1236,14 @@ struct Searcher {
 };
 
 // =====================================
-// pv_from_tt (outside class)
+// pv_from_tt (debug)
 // =====================================
 inline std::vector<Move> search::Searcher::pv_from_tt(Position& pos, int maxLen) {
     std::vector<Move> pv;
     pv.reserve(maxLen);
 
     Undo undos[128];
-    Move moves[128];
+    Move umoves[128];
     int ucnt = 0;
 
     uint64_t seen[128];
@@ -1246,17 +1257,15 @@ inline std::vector<Move> search::Searcher::pv_from_tt(Position& pos, int maxLen)
     Move prev = 0;
 
     for (int i = 0; i < maxLen; i++) {
-        const uint64_t key = zob.key(pos);
+        const uint64_t key = key_of(pos);
 
         if (seen_before(key)) break;
         if (seenN < 128) seen[seenN++] = key;
 
-        TTEntry* e = tt.probe(key);
-        if (!e || e->key != key) break;
+        TTEntry te{};
+        if (!stt->probe_copy(key, te)) break;
 
-        if (e->flag != TT_EXACT) break;
-
-        Move m = e->best;
+        Move m = te.best;
         if (!m) break;
 
         if (!is_legal_move_here(pos, m)) break;
@@ -1268,8 +1277,8 @@ inline std::vector<Move> search::Searcher::pv_from_tt(Position& pos, int maxLen)
             break;
         }
 
-        moves[ucnt] = m;
-        undos[ucnt] = pos.do_move(m);
+        umoves[ucnt] = m;
+        undos[ucnt]  = pos.do_move(m);
         ucnt++;
 
         if (attacks::in_check(pos, flip_color(pos.side))) {
@@ -1282,22 +1291,52 @@ inline std::vector<Move> search::Searcher::pv_from_tt(Position& pos, int maxLen)
     }
 
     for (int i = ucnt - 1; i >= 0; i--) {
-        pos.undo_move(moves[i], undos[i]);
+        pos.undo_move(umoves[i], undos[i]);
     }
 
     return pv;
 }
 
 // =====================================
-// THREADS (Lazy SMP) — minimal + stable
+// THREADS (Lazy SMP) — shared TT (NO recursion)
 // =====================================
 inline std::atomic<int> g_threads{1};
 inline int g_hash_mb = 64;
 
+// ✅ global shared zobrist + TT
+inline Zobrist g_zob;
+inline std::unique_ptr<SharedTT> g_shared_tt;
+
 inline std::vector<std::unique_ptr<Searcher>> g_pool_owner;
 inline std::vector<Searcher*> g_pool;
 
+inline int threads() {
+    return g_threads.load(std::memory_order_relaxed);
+}
+
+inline void ensure_pool() {
+    // 只负责“确保 shared_tt 存在”和“至少有 1 个 searcher”
+    if (!g_shared_tt) {
+        g_shared_tt = std::make_unique<SharedTT>();
+        g_shared_tt->resize_mb(std::max(1, g_hash_mb));
+    }
+
+    if (g_pool.empty()) {
+        // 直接创建 1 线程池，不调用 set_threads，避免递归
+        g_pool_owner.clear();
+        g_pool.clear();
+
+        g_pool_owner.emplace_back(std::make_unique<Searcher>());
+        g_pool_owner.back()->bind(g_shared_tt.get(), &g_zob);
+        g_pool.push_back(g_pool_owner.back().get());
+
+        g_threads.store(1, std::memory_order_relaxed);
+    }
+}
+
 inline void set_threads(int n) {
+    ensure_pool(); // 这里 safe：ensure_pool 不会反调 set_threads 了
+
     n = std::max(1, std::min(256, n));
     g_threads.store(n, std::memory_order_relaxed);
 
@@ -1308,17 +1347,9 @@ inline void set_threads(int n) {
 
     for (int i = 0; i < n; i++) {
         g_pool_owner.emplace_back(std::make_unique<Searcher>());
-        g_pool_owner.back()->set_hash_mb(g_hash_mb);
+        g_pool_owner.back()->bind(g_shared_tt.get(), &g_zob);
         g_pool.push_back(g_pool_owner.back().get());
     }
-}
-
-inline int threads() {
-    return g_threads.load(std::memory_order_relaxed);
-}
-
-inline void ensure_pool() {
-    if (g_pool.empty()) set_threads(1);
 }
 
 // =====================================
@@ -1340,7 +1371,6 @@ inline Result think(Position& pos, const Limits& lim) {
     std::vector<std::thread> workers;
     workers.reserve(n - 1);
 
-    // 副线程静默跑（Position 拷贝）
     for (int i = 1; i < n; i++) {
         Position pcopy = pos;
         workers.emplace_back([i, pcopy, lim]() mutable {
@@ -1348,7 +1378,6 @@ inline Result think(Position& pos, const Limits& lim) {
         });
     }
 
-    // 主线程输出
     Result mainRes = g_pool[0]->think(pos, lim, true);
 
     stop();
@@ -1361,12 +1390,13 @@ inline Result think(Position& pos, const Limits& lim) {
 inline void set_hash_mb(int mb) {
     ensure_pool();
     g_hash_mb = std::max(1, mb);
-    for (auto* s : g_pool) s->set_hash_mb(g_hash_mb);
+    g_shared_tt->resize_mb(g_hash_mb);
 }
 
 inline void clear_tt() {
     ensure_pool();
-    for (auto* s : g_pool) s->clear_tt();
+    g_shared_tt->clear();
 }
+
 
 } // namespace search
