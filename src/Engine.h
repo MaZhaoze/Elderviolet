@@ -70,6 +70,7 @@ class Engine {
     // Apply a UCI move string if it matches a legal move.
     void push_uci_move(const std::string& uciMove) {
         std::vector<Move> moves;
+        moves.reserve(256);
         movegen::generate_legal(pos, moves);
 
         for (Move m : moves) {

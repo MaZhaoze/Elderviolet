@@ -355,7 +355,14 @@ struct Searcher {
         int len = 0;
     };
 
-    Searcher() = default;
+    Searcher() {
+        for (int i = 0; i < MAX_PLY; i++) {
+            plyMoves[i].reserve(256);
+            plyScores[i].reserve(256);
+            plyOrder[i].reserve(256);
+            plyQList[i].reserve(256);
+        }
+    }
 
     inline void bind(SharedTT* shared) { stt = shared; }
 
@@ -1133,6 +1140,7 @@ struct Searcher {
         int lastFlushMs = 0;
 
         std::vector<Move> rootMoves;
+        rootMoves.reserve(256);
         movegen::generate_legal(pos, rootMoves);
 
         if (rootMoves.empty()) {

@@ -50,6 +50,8 @@ inline void add_promo(const Position& pos, std::vector<Move>& moves, int from, i
 // Does not filter out moves that leave the king in check.
 inline void generate_pseudo_legal(const Position& pos, std::vector<Move>& moves) {
     moves.clear();
+    if (moves.capacity() < 256)
+        moves.reserve(256);
     Color us = pos.side;
 
     static const int N_OFF[8] = {+17, +15, +10, +6, -6, -10, -15, -17};
@@ -294,9 +296,11 @@ inline void generate_legal(Position& pos, std::vector<Move>& legal) {
 // Legal captures only (used by quiescence and tactical filters).
 inline void generate_legal_captures(Position& pos, std::vector<Move>& caps) {
     std::vector<Move> legal;
+    legal.reserve(256);
     generate_legal(pos, legal);
 
     caps.clear();
+    caps.reserve(legal.size());
     for (Move m : legal) {
         if ((flags_of(m) & MF_CAPTURE) || (flags_of(m) & MF_EP) || promo_of(m))
             caps.push_back(m);
