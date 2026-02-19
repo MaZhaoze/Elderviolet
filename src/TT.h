@@ -18,6 +18,9 @@ struct TTEntry {
     Move best = 0;
 };
 
+// Keep TTEntry compact for predictable table sizing and cache behavior.
+static_assert(sizeof(TTEntry) == 24, "TTEntry size changed; review layout/alignment.");
+
 struct TT {
     std::vector<TTEntry> table;
     uint64_t mask = 0;
