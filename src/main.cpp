@@ -5,7 +5,7 @@
 #include "MoveGeneration.h"
 #include "Evaluation.h"
 #include "types.h"
-int main(){
+int main() {
     std::cout << "Elderviolet-avx2 0.3 by Magnus\n";
     Engine engine;
     uci::loop(engine);

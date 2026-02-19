@@ -53,7 +53,7 @@ struct Position {
     Color side = WHITE;
 
     int castlingRights = CR_WK | CR_WQ | CR_BK | CR_BQ;
-    int epSquare = -1;         // 0..63 or -1
+    int epSquare = -1; // 0..63 or -1
     int halfmoveClock = 0;
     int fullmoveNumber = 1;
 
@@ -69,7 +69,8 @@ struct Position {
     // basic helpers
     // ---------------------
     void clear() {
-        for (int i = 0; i < 64; i++) board[i] = NO_PIECE;
+        for (int i = 0; i < 64; i++)
+            board[i] = NO_PIECE;
         side = WHITE;
         castlingRights = CR_NONE;
         epSquare = -1;
@@ -80,33 +81,50 @@ struct Position {
 
     static inline Piece char_to_piece(char c) {
         switch (c) {
-            case 'P': return W_PAWN;
-            case 'N': return W_KNIGHT;
-            case 'B': return W_BISHOP;
-            case 'R': return W_ROOK;
-            case 'Q': return W_QUEEN;
-            case 'K': return W_KING;
-            case 'p': return B_PAWN;
-            case 'n': return B_KNIGHT;
-            case 'b': return B_BISHOP;
-            case 'r': return B_ROOK;
-            case 'q': return B_QUEEN;
-            case 'k': return B_KING;
-            default:  return NO_PIECE;
+        case 'P':
+            return W_PAWN;
+        case 'N':
+            return W_KNIGHT;
+        case 'B':
+            return W_BISHOP;
+        case 'R':
+            return W_ROOK;
+        case 'Q':
+            return W_QUEEN;
+        case 'K':
+            return W_KING;
+        case 'p':
+            return B_PAWN;
+        case 'n':
+            return B_KNIGHT;
+        case 'b':
+            return B_BISHOP;
+        case 'r':
+            return B_ROOK;
+        case 'q':
+            return B_QUEEN;
+        case 'k':
+            return B_KING;
+        default:
+            return NO_PIECE;
         }
     }
 
     static inline int algebraic_to_sq(const std::string& s) {
         // "e3" -> square index
-        if (s.size() != 2) return -1;
+        if (s.size() != 2)
+            return -1;
         char f = s[0], r = s[1];
-        if (f < 'a' || f > 'h') return -1;
-        if (r < '1' || r > '8') return -1;
+        if (f < 'a' || f > 'h')
+            return -1;
+        if (r < '1' || r > '8')
+            return -1;
         return make_sq(f - 'a', r - '1');
     }
 
     static inline std::string sq_to_algebraic(int sq) {
-        if (sq < 0 || sq >= 64) return "-";
+        if (sq < 0 || sq >= 64)
+            return "-";
         std::string s;
         s += char('a' + file_of(sq));
         s += char('1' + rank_of(sq));
@@ -121,14 +139,18 @@ struct Position {
         uint64_t k = 0;
         for (int sq = 0; sq < 64; sq++) {
             Piece p = board[sq];
-            if (p == NO_PIECE) continue;
+            if (p == NO_PIECE)
+                continue;
             int pi = (int)p;
-            if ((unsigned)pi >= 16u) continue;
+            if ((unsigned)pi >= 16u)
+                continue;
             k ^= g_zob.psq[pi][sq];
         }
-        if (side == BLACK) k ^= g_zob.sideKey;
+        if (side == BLACK)
+            k ^= g_zob.sideKey;
         k ^= g_zob.castleKey[castlingRights & 15];
-        if (epSquare != -1) k ^= g_zob.epKey[file_of(epSquare) & 7];
+        if (epSquare != -1)
+            k ^= g_zob.epKey[file_of(epSquare) & 7];
         zobKey = k;
     }
 
@@ -140,8 +162,10 @@ struct Position {
         uint64_t k = u.prevKey;
 
         // EP key: remove old, add new
-        if (u.prevEpSquare != -1) k ^= g_zob.epKey[file_of(u.prevEpSquare) & 7];
-        if (epSquare != -1)       k ^= g_zob.epKey[file_of(epSquare) & 7];
+        if (u.prevEpSquare != -1)
+            k ^= g_zob.epKey[file_of(u.prevEpSquare) & 7];
+        if (epSquare != -1)
+            k ^= g_zob.epKey[file_of(epSquare) & 7];
 
         // Castling key: remove old, add new
         k ^= g_zob.castleKey[u.prevCastling & 15];
@@ -151,30 +175,34 @@ struct Position {
         k ^= g_zob.sideKey;
 
         const int from = from_sq(m);
-        const int to   = to_sq(m);
+        const int to = to_sq(m);
 
         // moved piece off from-square
         {
             int pi = (int)u.moved;
-            if ((unsigned)pi < 16u) k ^= g_zob.psq[pi][from];
+            if ((unsigned)pi < 16u)
+                k ^= g_zob.psq[pi][from];
         }
 
         // captured piece off board (normal capture on 'to', EP on u.epCapturedSq)
         if (flags_of(m) & MF_EP) {
             if (u.epCapturedSq != -1 && u.captured != NO_PIECE) {
                 int pi = (int)u.captured;
-                if ((unsigned)pi < 16u) k ^= g_zob.psq[pi][u.epCapturedSq];
+                if ((unsigned)pi < 16u)
+                    k ^= g_zob.psq[pi][u.epCapturedSq];
             }
         } else if (u.captured != NO_PIECE) {
             int pi = (int)u.captured;
-            if ((unsigned)pi < 16u) k ^= g_zob.psq[pi][to];
+            if ((unsigned)pi < 16u)
+                k ^= g_zob.psq[pi][to];
         }
 
         // final piece on 'to' (after promotion/castle/normal)
         {
             Piece finalP = board[to];
             int pi = (int)finalP;
-            if ((unsigned)pi < 16u) k ^= g_zob.psq[pi][to];
+            if ((unsigned)pi < 16u)
+                k ^= g_zob.psq[pi][to];
         }
 
         // castling rook move
@@ -199,14 +227,28 @@ struct Position {
         clear();
 
         // White pieces
-        board[A1]=W_ROOK;   board[B1]=W_KNIGHT; board[C1]=W_BISHOP; board[D1]=W_QUEEN;
-        board[E1]=W_KING;   board[F1]=W_BISHOP; board[G1]=W_KNIGHT; board[H1]=W_ROOK;
-        for (int f = 0; f < 8; f++) board[make_sq(f,1)] = W_PAWN;
+        board[A1] = W_ROOK;
+        board[B1] = W_KNIGHT;
+        board[C1] = W_BISHOP;
+        board[D1] = W_QUEEN;
+        board[E1] = W_KING;
+        board[F1] = W_BISHOP;
+        board[G1] = W_KNIGHT;
+        board[H1] = W_ROOK;
+        for (int f = 0; f < 8; f++)
+            board[make_sq(f, 1)] = W_PAWN;
 
         // Black pieces
-        board[A8]=B_ROOK;   board[B8]=B_KNIGHT; board[C8]=B_BISHOP; board[D8]=B_QUEEN;
-        board[E8]=B_KING;   board[F8]=B_BISHOP; board[G8]=B_KNIGHT; board[H8]=B_ROOK;
-        for (int f = 0; f < 8; f++) board[make_sq(f,6)] = B_PAWN;
+        board[A8] = B_ROOK;
+        board[B8] = B_KNIGHT;
+        board[C8] = B_BISHOP;
+        board[D8] = B_QUEEN;
+        board[E8] = B_KING;
+        board[F8] = B_BISHOP;
+        board[G8] = B_KNIGHT;
+        board[H8] = B_ROOK;
+        for (int f = 0; f < 8; f++)
+            board[make_sq(f, 6)] = B_PAWN;
 
         side = WHITE;
         castlingRights = CR_WK | CR_WQ | CR_BK | CR_BQ;
@@ -246,7 +288,8 @@ struct Position {
                 continue;
             }
             Piece p = char_to_piece(c);
-            if (sq >= 0 && sq < 64) board[sq] = p;
+            if (sq >= 0 && sq < 64)
+                board[sq] = p;
             sq++;
         }
 
@@ -257,20 +300,28 @@ struct Position {
         castlingRights = CR_NONE;
         if (!castlingPart.empty() && castlingPart != "-") {
             for (char c : castlingPart) {
-                if (c == 'K') castlingRights |= CR_WK;
-                else if (c == 'Q') castlingRights |= CR_WQ;
-                else if (c == 'k') castlingRights |= CR_BK;
-                else if (c == 'q') castlingRights |= CR_BQ;
+                if (c == 'K')
+                    castlingRights |= CR_WK;
+                else if (c == 'Q')
+                    castlingRights |= CR_WQ;
+                else if (c == 'k')
+                    castlingRights |= CR_BK;
+                else if (c == 'q')
+                    castlingRights |= CR_BQ;
             }
         }
 
         // 4) ep
-        if (epPart == "-" || epPart.empty()) epSquare = -1;
-        else epSquare = algebraic_to_sq(epPart);
+        if (epPart == "-" || epPart.empty())
+            epSquare = -1;
+        else
+            epSquare = algebraic_to_sq(epPart);
 
         // defaults if missing
-        if (halfmoveClock < 0) halfmoveClock = 0;
-        if (fullmoveNumber <= 0) fullmoveNumber = 1;
+        if (halfmoveClock < 0)
+            halfmoveClock = 0;
+        if (fullmoveNumber <= 0)
+            fullmoveNumber = 1;
 
         recompute_zobrist();
     }
@@ -279,16 +330,22 @@ struct Position {
     // Castling rights update helpers
     // ---------------------
     inline void remove_castling_for_king(Color c) {
-        if (c == WHITE) castlingRights &= ~(CR_WK | CR_WQ);
-        else castlingRights &= ~(CR_BK | CR_BQ);
+        if (c == WHITE)
+            castlingRights &= ~(CR_WK | CR_WQ);
+        else
+            castlingRights &= ~(CR_BK | CR_BQ);
     }
 
     inline void remove_castling_for_rook_square(int sq) {
         // if a rook moves from or is captured on its original square
-        if (sq == H1) castlingRights &= ~CR_WK;
-        else if (sq == A1) castlingRights &= ~CR_WQ;
-        else if (sq == H8) castlingRights &= ~CR_BK;
-        else if (sq == A8) castlingRights &= ~CR_BQ;
+        if (sq == H1)
+            castlingRights &= ~CR_WK;
+        else if (sq == A1)
+            castlingRights &= ~CR_WQ;
+        else if (sq == H8)
+            castlingRights &= ~CR_BK;
+        else if (sq == A8)
+            castlingRights &= ~CR_BQ;
     }
 
     // ---------------------
@@ -302,17 +359,17 @@ struct Position {
     // ---------------------
     Undo do_move(Move m) {
         Undo u;
-        u.prevSide     = side;            // ✅关键：保存 side
+        u.prevSide = side; // ✅关键：保存 side
         u.prevCastling = castlingRights;
         u.prevEpSquare = epSquare;
         u.prevHalfmove = halfmoveClock;
         u.prevFullmove = fullmoveNumber;
-        u.prevKey      = zobKey;          // ✅保存 key（fast undo + delta base）
+        u.prevKey = zobKey; // ✅保存 key（fast undo + delta base）
 
         const int from = from_sq(m);
-        const int to   = to_sq(m);
+        const int to = to_sq(m);
 
-        u.moved    = board[from];
+        u.moved = board[from];
         u.captured = board[to];
 
         Piece movedPiece = board[from];
@@ -324,8 +381,10 @@ struct Position {
 
         // halfmove clock reset on pawn move or capture
         bool isCapture = (u.captured != NO_PIECE) || (flags_of(m) & MF_EP);
-        if (movedType == PAWN || isCapture) halfmoveClock = 0;
-        else halfmoveClock++;
+        if (movedType == PAWN || isCapture)
+            halfmoveClock = 0;
+        else
+            halfmoveClock++;
 
         // --- Update castling rights based on moved piece
         if (movedType == KING) {
@@ -364,15 +423,19 @@ struct Position {
             // rook move record
             if (us == WHITE) {
                 if (from == E1 && to == G1) { // O-O
-                    u.rookFrom = H1; u.rookTo = F1;
+                    u.rookFrom = H1;
+                    u.rookTo = F1;
                 } else if (from == E1 && to == C1) { // O-O-O
-                    u.rookFrom = A1; u.rookTo = D1;
+                    u.rookFrom = A1;
+                    u.rookTo = D1;
                 }
             } else {
                 if (from == E8 && to == G8) { // O-O
-                    u.rookFrom = H8; u.rookTo = F8;
+                    u.rookFrom = H8;
+                    u.rookTo = F8;
                 } else if (from == E8 && to == C8) { // O-O-O
-                    u.rookFrom = A8; u.rookTo = D8;
+                    u.rookFrom = A8;
+                    u.rookTo = D8;
                 }
             }
 
@@ -394,10 +457,14 @@ struct Position {
             int promo = promo_of(m);
             if (promo && movedType == PAWN) {
                 PieceType pt = QUEEN;
-                if (promo == 1) pt = KNIGHT;
-                else if (promo == 2) pt = BISHOP;
-                else if (promo == 3) pt = ROOK;
-                else if (promo == 4) pt = QUEEN;
+                if (promo == 1)
+                    pt = KNIGHT;
+                else if (promo == 2)
+                    pt = BISHOP;
+                else if (promo == 3)
+                    pt = ROOK;
+                else if (promo == 4)
+                    pt = QUEEN;
 
                 board[to] = make_piece(us, pt);
             }
@@ -405,8 +472,10 @@ struct Position {
             // set ep square if pawn double move
             if (movedType == PAWN) {
                 int dr = rank_of(to) - rank_of(from);
-                if (us == WHITE && dr == 2) epSquare = from + 8;
-                else if (us == BLACK && dr == -2) epSquare = from - 8;
+                if (us == WHITE && dr == 2)
+                    epSquare = from + 8;
+                else if (us == BLACK && dr == -2)
+                    epSquare = from - 8;
             }
         }
 
@@ -414,7 +483,8 @@ struct Position {
         side = ~side;
 
         // Fullmove increments after Black makes a move
-        if (us == BLACK) fullmoveNumber++;
+        if (us == BLACK)
+            fullmoveNumber++;
 
         // ✅ Apply incremental Zobrist update (O(1))
         apply_zobrist_delta_after_move(u, m);
@@ -424,12 +494,12 @@ struct Position {
 
     void undo_move(Move m, const Undo& u) {
         const int from = from_sq(m);
-        const int to   = to_sq(m);
+        const int to = to_sq(m);
 
         // restore state first
         castlingRights = u.prevCastling;
-        epSquare       = u.prevEpSquare;
-        halfmoveClock  = u.prevHalfmove;
+        epSquare = u.prevEpSquare;
+        halfmoveClock = u.prevHalfmove;
         fullmoveNumber = u.prevFullmove;
 
         // ✅关键：直接恢复 side（不要推断！）
@@ -453,7 +523,7 @@ struct Position {
 
         // Normal undo (includes promo)
         board[from] = u.moved;
-        board[to]   = u.captured;
+        board[to] = u.captured;
 
         // ✅ fast restore key (always correct)
         zobKey = u.prevKey;
@@ -463,7 +533,8 @@ struct Position {
     int king_square(Color c) const {
         Piece king = (c == WHITE) ? W_KING : B_KING;
         for (int i = 0; i < 64; i++)
-            if (board[i] == king) return i;
+            if (board[i] == king)
+                return i;
         return -1;
     }
 };

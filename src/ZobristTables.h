@@ -18,8 +18,10 @@ struct ZobristTables {
                 psq[p][s] = R();
 
         sideKey = R();
-        for (int i = 0; i < 16; i++) castleKey[i] = R();
-        for (int i = 0; i < 8;  i++) epKey[i] = R();
+        for (int i = 0; i < 16; i++)
+            castleKey[i] = R();
+        for (int i = 0; i < 8; i++)
+            epKey[i] = R();
     }
 };
 

@@ -17,56 +17,66 @@ namespace uci {
 // helpers
 // =====================
 static inline std::string ltrim(std::string s) {
-    s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) {
-        return !std::isspace(ch);
-    }));
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) { return !std::isspace(ch); }));
     return s;
 }
 static inline std::string rtrim(std::string s) {
-    s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) {
-        return !std::isspace(ch);
-    }).base(), s.end());
+    s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base(), s.end());
     return s;
 }
-static inline std::string trim(std::string s) { return rtrim(ltrim(std::move(s))); }
+static inline std::string trim(std::string s) {
+    return rtrim(ltrim(std::move(s)));
+}
 
 static inline std::vector<std::string> split(const std::string& s) {
     std::vector<std::string> out;
     std::istringstream iss(s);
     std::string tok;
-    while (iss >> tok) out.push_back(tok);
+    while (iss >> tok)
+        out.push_back(tok);
     return out;
 }
 
 static inline int to_int_safe(const std::string& s, int def) {
-    if (s.empty()) return def;
+    if (s.empty())
+        return def;
 
     int sign = 1;
     size_t i = 0;
-    if (s[0] == '-') { sign = -1; i = 1; }
-    else if (s[0] == '+') { i = 1; }
+    if (s[0] == '-') {
+        sign = -1;
+        i = 1;
+    } else if (s[0] == '+') {
+        i = 1;
+    }
 
     long long x = 0;
     for (; i < s.size(); i++) {
         char c = s[i];
-        if (c < '0' || c > '9') return def;
+        if (c < '0' || c > '9')
+            return def;
         x = x * 10 + (c - '0');
-        if (x > 2000000000LL) break;
+        if (x > 2000000000LL)
+            break;
     }
     x *= sign;
-    if (x < -2000000000LL || x > 2000000000LL) return def;
+    if (x < -2000000000LL || x > 2000000000LL)
+        return def;
     return (int)x;
 }
 
 static inline std::string to_lower(std::string s) {
-    for (char& c : s) c = (char)std::tolower((unsigned char)c);
+    for (char& c : s)
+        c = (char)std::tolower((unsigned char)c);
     return s;
 }
 
 static inline bool to_bool_safe(const std::string& s, bool def) {
     std::string x = to_lower(s);
-    if (x == "true" || x == "1" || x == "yes" || x == "on") return true;
-    if (x == "false" || x == "0" || x == "no" || x == "off") return false;
+    if (x == "true" || x == "1" || x == "yes" || x == "on")
+        return true;
+    if (x == "false" || x == "0" || x == "no" || x == "off")
+        return false;
     return def;
 }
 
@@ -111,7 +121,8 @@ static inline void cmd_setoption(const std::vector<std::string>& tokens, Engine&
     if (itName != tokens.end() && (itName + 1) != tokens.end()) {
         auto it = itName + 1;
         while (it != tokens.end() && *it != "value") {
-            if (!name.empty()) name += " ";
+            if (!name.empty())
+                name += " ";
             name += *it;
             ++it;
         }
@@ -120,7 +131,8 @@ static inline void cmd_setoption(const std::vector<std::string>& tokens, Engine&
     auto itVal = std::find(tokens.begin(), tokens.end(), "value");
     if (itVal != tokens.end() && (itVal + 1) != tokens.end()) {
         for (auto it = itVal + 1; it != tokens.end(); ++it) {
-            if (!value.empty()) value += " ";
+            if (!value.empty())
+                value += " ";
             value += *it;
         }
     }
@@ -175,7 +187,8 @@ static inline void cmd_setoption(const std::vector<std::string>& tokens, Engine&
 }
 
 static inline void cmd_position(const std::vector<std::string>& tokens, Engine& engine) {
-    if (tokens.size() < 2) return;
+    if (tokens.size() < 2)
+        return;
 
     int idx = 1;
     if (tokens[idx] == "startpos") {
@@ -185,7 +198,8 @@ static inline void cmd_position(const std::vector<std::string>& tokens, Engine& 
         idx++;
         std::string fen;
         while (idx < (int)tokens.size() && tokens[idx] != "moves") {
-            if (!fen.empty()) fen += " ";
+            if (!fen.empty())
+                fen += " ";
             fen += tokens[idx];
             idx++;
         }
@@ -208,8 +222,8 @@ static inline void cmd_go(const std::vector<std::string>& tokens, Engine& engine
     bool infinite = false;
 
     bool provided_wtime = false, provided_btime = false;
-    bool provided_winc  = false, provided_binc  = false;
-    bool provided_mtg   = false;
+    bool provided_winc = false, provided_binc = false;
+    bool provided_mtg = false;
 
     bool ponder = false;
 
@@ -225,60 +239,50 @@ static inline void cmd_go(const std::vector<std::string>& tokens, Engine& engine
 
         if (t == "ponder") {
             ponder = true;
-        }
-        else if (t == "infinite") {
+        } else if (t == "infinite") {
             infinite = true;
-        }
-        else if (t == "depth" && i + 1 < (int)tokens.size()) {
+        } else if (t == "depth" && i + 1 < (int)tokens.size()) {
             depth = to_int_safe(tokens[++i], 0);
             provided_depth = true;
-        }
-        else if (t == "movetime" && i + 1 < (int)tokens.size()) {
+        } else if (t == "movetime" && i + 1 < (int)tokens.size()) {
             movetime = to_int_safe(tokens[++i], 0);
             provided_movetime = true;
-        }
-        else if (t == "wtime" && i + 1 < (int)tokens.size()) {
+        } else if (t == "wtime" && i + 1 < (int)tokens.size()) {
             wtime = to_int_safe(tokens[++i], -1);
             provided_wtime = true;
-        }
-        else if (t == "btime" && i + 1 < (int)tokens.size()) {
+        } else if (t == "btime" && i + 1 < (int)tokens.size()) {
             btime = to_int_safe(tokens[++i], -1);
             provided_btime = true;
-        }
-        else if (t == "winc" && i + 1 < (int)tokens.size()) {
+        } else if (t == "winc" && i + 1 < (int)tokens.size()) {
             winc = to_int_safe(tokens[++i], -1);
             provided_winc = true;
-        }
-        else if (t == "binc" && i + 1 < (int)tokens.size()) {
+        } else if (t == "binc" && i + 1 < (int)tokens.size()) {
             binc = to_int_safe(tokens[++i], -1);
             provided_binc = true;
-        }
-        else if (t == "movestogo" && i + 1 < (int)tokens.size()) {
+        } else if (t == "movestogo" && i + 1 < (int)tokens.size()) {
             movestogo = to_int_safe(tokens[++i], 0);
             provided_mtg = true;
         }
     }
 
-    const bool hasClock =
-        provided_wtime || provided_btime || provided_winc || provided_binc || provided_mtg;
+    const bool hasClock = provided_wtime || provided_btime || provided_winc || provided_binc || provided_mtg;
 
     if (!provided_depth && !provided_movetime && !infinite && !hasClock && !ponder) {
         movetime = 1000;
         provided_movetime = true;
     }
 
-    int depth_arg    = provided_depth    ? depth    : 0;
+    int depth_arg = provided_depth ? depth : 0;
     int movetime_arg = provided_movetime ? movetime : 0;
 
     int wtime_arg = provided_wtime ? wtime : -1;
     int btime_arg = provided_btime ? btime : -1;
-    int winc_arg  = provided_winc  ? winc  : -1;
-    int binc_arg  = provided_binc  ? binc  : -1;
-    int mtg_arg   = provided_mtg   ? movestogo : 0;
+    int winc_arg = provided_winc ? winc : -1;
+    int binc_arg = provided_binc ? binc : -1;
+    int mtg_arg = provided_mtg ? movestogo : 0;
 
-    int bestMove = engine.go(depth_arg, movetime_arg, infinite,
-                             wtime_arg, btime_arg, winc_arg, binc_arg, mtg_arg,
-                             ponder);
+    int bestMove =
+        engine.go(depth_arg, movetime_arg, infinite, wtime_arg, btime_arg, winc_arg, binc_arg, mtg_arg, ponder);
 
     // ✅ go ponder：不输出 bestmove，等 ponderhit/stop 再输出
     if (ponder) {
@@ -305,7 +309,8 @@ static inline void loop(Engine& engine) {
     std::string line;
     while (std::getline(std::cin, line)) {
         line = trim(line);
-        if (line.empty()) continue;
+        if (line.empty())
+            continue;
 
         auto tokens = split(line);
         const std::string& cmd = tokens[0];

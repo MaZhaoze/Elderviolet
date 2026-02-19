@@ -30,8 +30,8 @@ struct Tables {
 
             // Knight
             {
-                static const int df[8] = { +1,+2,+2,+1,-1,-2,-2,-1 };
-                static const int dr[8] = { +2,+1,-1,-2,-2,-1,+1,+2 };
+                static const int df[8] = {+1, +2, +2, +1, -1, -2, -2, -1};
+                static const int dr[8] = {+2, +1, -1, -2, -2, -1, +1, +2};
                 Bitboard b = 0;
                 for (int i = 0; i < 8; i++) {
                     int ff = f + df[i];
@@ -46,8 +46,8 @@ struct Tables {
 
             // King
             {
-                static const int df[8] = { +1,+1, 0,-1,-1,-1, 0,+1 };
-                static const int dr[8] = {  0,+1,+1,+1, 0,-1,-1,-1 };
+                static const int df[8] = {+1, +1, 0, -1, -1, -1, 0, +1};
+                static const int dr[8] = {0, +1, +1, +1, 0, -1, -1, -1};
                 Bitboard b = 0;
                 for (int i = 0; i < 8; i++) {
                     int ff = f + df[i];
@@ -68,14 +68,18 @@ struct Tables {
 
                 // WHITE: (f-1,r+1) and (f+1,r+1)
                 if ((unsigned)(r + 1) < 8u) {
-                    if ((unsigned)(f - 1) < 8u) w |= bb_sq(make_sq(f - 1, r + 1));
-                    if ((unsigned)(f + 1) < 8u) w |= bb_sq(make_sq(f + 1, r + 1));
+                    if ((unsigned)(f - 1) < 8u)
+                        w |= bb_sq(make_sq(f - 1, r + 1));
+                    if ((unsigned)(f + 1) < 8u)
+                        w |= bb_sq(make_sq(f + 1, r + 1));
                 }
 
                 // BLACK: (f-1,r-1) and (f+1,r-1)
                 if ((unsigned)(r - 1) < 8u) {
-                    if ((unsigned)(f - 1) < 8u) b |= bb_sq(make_sq(f - 1, r - 1));
-                    if ((unsigned)(f + 1) < 8u) b |= bb_sq(make_sq(f + 1, r - 1));
+                    if ((unsigned)(f - 1) < 8u)
+                        b |= bb_sq(make_sq(f - 1, r - 1));
+                    if ((unsigned)(f + 1) < 8u)
+                        b |= bb_sq(make_sq(f + 1, r - 1));
                 }
 
                 pawn[WHITE][sq] = w;
@@ -94,12 +98,10 @@ inline const Tables& T() {
 // Piece match helpers (no assumptions beyond your enum names)
 // -------------------------------------
 static constexpr inline bool is_slider_bishop_queen(Piece p, Color c) {
-    return (c == WHITE) ? (p == W_BISHOP || p == W_QUEEN)
-                        : (p == B_BISHOP || p == B_QUEEN);
+    return (c == WHITE) ? (p == W_BISHOP || p == W_QUEEN) : (p == B_BISHOP || p == B_QUEEN);
 }
 static constexpr inline bool is_slider_rook_queen(Piece p, Color c) {
-    return (c == WHITE) ? (p == W_ROOK || p == W_QUEEN)
-                        : (p == B_ROOK || p == B_QUEEN);
+    return (c == WHITE) ? (p == W_ROOK || p == W_QUEEN) : (p == B_ROOK || p == B_QUEEN);
 }
 static constexpr inline bool is_knight(Piece p, Color c) {
     return (c == WHITE) ? (p == W_KNIGHT) : (p == B_KNIGHT);
@@ -116,7 +118,8 @@ static constexpr inline bool is_pawn(Piece p, Color c) {
 // Returns bitboard of squares containing byColor pieces that attack sq
 // -------------------------------------
 inline Bitboard attackers_to_bb(const Position& pos, int sq, Color byColor) {
-    if ((unsigned)sq >= 64u) return 0ULL;
+    if ((unsigned)sq >= 64u)
+        return 0ULL;
 
     Bitboard atk = 0ULL;
 
@@ -129,11 +132,13 @@ inline Bitboard attackers_to_bb(const Position& pos, int sq, Color byColor) {
         if ((unsigned)(r - 1) < 8u) {
             if ((unsigned)(f - 1) < 8u) {
                 int from = make_sq(f - 1, r - 1);
-                if (pos.board[from] == W_PAWN) atk |= bb_sq(from);
+                if (pos.board[from] == W_PAWN)
+                    atk |= bb_sq(from);
             }
             if ((unsigned)(f + 1) < 8u) {
                 int from = make_sq(f + 1, r - 1);
-                if (pos.board[from] == W_PAWN) atk |= bb_sq(from);
+                if (pos.board[from] == W_PAWN)
+                    atk |= bb_sq(from);
             }
         }
     } else {
@@ -141,11 +146,13 @@ inline Bitboard attackers_to_bb(const Position& pos, int sq, Color byColor) {
         if ((unsigned)(r + 1) < 8u) {
             if ((unsigned)(f - 1) < 8u) {
                 int from = make_sq(f - 1, r + 1);
-                if (pos.board[from] == B_PAWN) atk |= bb_sq(from);
+                if (pos.board[from] == B_PAWN)
+                    atk |= bb_sq(from);
             }
             if ((unsigned)(f + 1) < 8u) {
                 int from = make_sq(f + 1, r + 1);
-                if (pos.board[from] == B_PAWN) atk |= bb_sq(from);
+                if (pos.board[from] == B_PAWN)
+                    atk |= bb_sq(from);
             }
         }
     }
@@ -157,7 +164,8 @@ inline Bitboard attackers_to_bb(const Position& pos, int sq, Color byColor) {
             int from = __builtin_ctzll(nmask);
             nmask &= nmask - 1;
             Piece p = pos.board[from];
-            if (p != NO_PIECE && is_knight(p, byColor)) atk |= bb_sq(from);
+            if (p != NO_PIECE && is_knight(p, byColor))
+                atk |= bb_sq(from);
         }
     }
 
@@ -168,7 +176,8 @@ inline Bitboard attackers_to_bb(const Position& pos, int sq, Color byColor) {
             int from = __builtin_ctzll(kmask);
             kmask &= kmask - 1;
             Piece p = pos.board[from];
-            if (p != NO_PIECE && is_king(p, byColor)) atk |= bb_sq(from);
+            if (p != NO_PIECE && is_king(p, byColor))
+                atk |= bb_sq(from);
         }
     }
 
@@ -181,9 +190,11 @@ inline Bitboard attackers_to_bb(const Position& pos, int sq, Color byColor) {
             Piece p = pos.board[from];
             if (p != NO_PIECE) {
                 if (diag) {
-                    if (is_slider_bishop_queen(p, byColor)) atk |= bb_sq(from);
+                    if (is_slider_bishop_queen(p, byColor))
+                        atk |= bb_sq(from);
                 } else {
-                    if (is_slider_rook_queen(p, byColor)) atk |= bb_sq(from);
+                    if (is_slider_rook_queen(p, byColor))
+                        atk |= bb_sq(from);
                 }
                 break; // first blocker decides
             }
@@ -199,10 +210,10 @@ inline Bitboard attackers_to_bb(const Position& pos, int sq, Color byColor) {
     scan_dir(-1, -1, true);
 
     // Orthogonals
-    scan_dir(+1,  0, false);
-    scan_dir(-1,  0, false);
-    scan_dir( 0, +1, false);
-    scan_dir( 0, -1, false);
+    scan_dir(+1, 0, false);
+    scan_dir(-1, 0, false);
+    scan_dir(0, +1, false);
+    scan_dir(0, -1, false);
 
     return atk;
 }
@@ -221,7 +232,8 @@ inline bool is_square_attacked(const Position& pos, int sq, Color byColor) {
 
 inline bool in_check(const Position& pos, Color sideToCheck) {
     int ksq = pos.king_square(sideToCheck);
-    if (ksq < 0) return false;
+    if (ksq < 0)
+        return false;
     return is_square_attacked(pos, ksq, flip(sideToCheck));
 }
 

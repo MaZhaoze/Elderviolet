@@ -15,7 +15,7 @@
 #include "Search.h"
 
 class Engine {
-public:
+  public:
     Engine() { pos.set_startpos(); }
 
     ~Engine() {
@@ -36,13 +36,13 @@ public:
         threads_ = std::max(1, n);
         search::set_threads(threads_);
     }
-    void set_multipv(int n) { multipv_ = std::max(1, n); }     // 先存着（暂不实现 multipv 输出）
-    void set_ponder(bool b) { ponder_ = b; }                   // 先存着（UCI go ponder 仍可用）
+    void set_multipv(int n) { multipv_ = std::max(1, n); } // 先存着（暂不实现 multipv 输出）
+    void set_ponder(bool b) { ponder_ = b; }               // 先存着（UCI go ponder 仍可用）
     void set_move_overhead(int ms) { move_overhead_ms_ = std::max(0, ms); }
-    int  move_overhead_ms() const { return move_overhead_ms_; }
+    int move_overhead_ms() const { return move_overhead_ms_; }
     void set_syzygy_path(const std::string& s) { syzygy_path_ = s; } // 先存着
     void set_skill_level(int lv) { skill_level_ = std::max(0, std::min(20, lv)); }
-    int  skill_level() const { return skill_level_; }
+    int skill_level() const { return skill_level_; }
 
     // ===== position =====
     void set_startpos() { pos.set_startpos(); }
@@ -57,7 +57,8 @@ public:
         // 若有后台线程，join
         if (searching_.load(std::memory_order_acquire)) {
             std::lock_guard<std::mutex> g(bg_mtx_);
-            if (bg_thread_.joinable()) bg_thread_.join();
+            if (bg_thread_.joinable())
+                bg_thread_.join();
             searching_.store(false, std::memory_order_release);
             pondering_.store(false, std::memory_order_release);
         }
@@ -66,7 +67,8 @@ public:
     // ===== UCI: ponderhit =====
     // 最小实现：停止 ponder 线程，拿到结果
     void ponderhit() {
-        if (!pondering_.load(std::memory_order_acquire)) return;
+        if (!pondering_.load(std::memory_order_acquire))
+            return;
         stop(); // stop + join
         // 结果已经写入 last_best_move_/last_ponder_move_
     }
@@ -86,22 +88,14 @@ public:
     }
 
     // ===== getter =====
-    int get_last_ponder_move() const {
-        return last_ponder_move_.load(std::memory_order_relaxed);
-    }
+    int get_last_ponder_move() const { return last_ponder_move_.load(std::memory_order_relaxed); }
 
     // ===== go =====
     // depth: >0 表示用户强制深度；<=0 表示未给 depth（time-based）
     // movetime: >0 表示用户强制时长；<=0 表示未给 movetime（用 wtime/btime 算）
     // ponder: go ponder（后台无限搜，不立即输出 bestmove）
-    int go(int depth,
-           int movetime,
-           bool infinite,
-           int wtime, int btime,
-           int winc, int binc,
-           int movestogo,
-           bool ponder)
-    {
+    int go(int depth, int movetime, bool infinite, int wtime, int btime, int winc, int binc, int movestogo,
+           bool ponder) {
         // 如果正在后台搜，先停掉（避免重入）
         stop();
 
@@ -110,11 +104,10 @@ public:
         lim.movetime_ms = 0;
         lim.infinite = false;
 
-        const bool depth_given    = (depth > 0);
+        const bool depth_given = (depth > 0);
         const bool movetime_given = (movetime > 0);
 
-        const bool hasClock =
-            (wtime > 0) || (btime > 0) || (winc > 0) || (binc > 0) || (movestogo > 0);
+        const bool hasClock = (wtime > 0) || (btime > 0) || (winc > 0) || (binc > 0) || (movestogo > 0);
 
         // go ponder：当作无限思考（直到 ponderhit/stop）
         if (ponder) {
@@ -152,13 +145,16 @@ public:
         // 3) clock 模式：没给 movetime 且真的有 clock 才算时间
         if (hasClock) {
             int myTime = (pos.side == WHITE ? wtime : btime);
-            int myInc  = (pos.side == WHITE ? winc  : binc);
+            int myInc = (pos.side == WHITE ? winc : binc);
 
-            if (myTime < 0) myTime = 0;
-            if (myInc  < 0) myInc  = 0;
+            if (myTime < 0)
+                myTime = 0;
+            if (myInc < 0)
+                myInc = 0;
 
             int t_ms = compute_think_ms(myTime, myInc, movestogo, move_overhead_ms_);
-            if (t_ms < 1) t_ms = 1;
+            if (t_ms < 1)
+                t_ms = 1;
 
             lim.movetime_ms = t_ms;
             lim.infinite = false;
@@ -173,7 +169,7 @@ public:
 
         // Skill Level：只在 “用户没给 depth 且是 clock 模式” 时弱化
         if (!depth_given && hasClock && skill_level_ < 20) {
-            int capDepth = 4 + skill_level_ / 2;   // 0..19 -> 4..13
+            int capDepth = 4 + skill_level_ / 2; // 0..19 -> 4..13
             capDepth = std::max(1, std::min(64, capDepth));
             lim.depth = capDepth;
 
@@ -191,7 +187,7 @@ public:
 
     std::string move_to_uci(Move m) const {
         int from = from_sq(m);
-        int to   = to_sq(m);
+        int to = to_sq(m);
 
         std::string s;
         s += char('a' + file_of(from));
@@ -202,27 +198,28 @@ public:
         int promo = promo_of(m);
         if (promo) {
             char pc = 'q';
-            if (promo == 1) pc = 'n';
-            else if (promo == 2) pc = 'b';
-            else if (promo == 3) pc = 'r';
-            else if (promo == 4) pc = 'q';
+            if (promo == 1)
+                pc = 'n';
+            else if (promo == 2)
+                pc = 'b';
+            else if (promo == 3)
+                pc = 'r';
+            else if (promo == 4)
+                pc = 'q';
             s += pc;
         }
         return s;
     }
 
-private:
+  private:
     // time split for wtime/btime mode only (ms)
-    static inline int compute_think_ms(
-        int mytime_ms,
-        int myinc_ms,
-        int movestogo,
-        int move_overhead_ms
-    ) {
-        if (mytime_ms <= 0) return 1;
+    static inline int compute_think_ms(int mytime_ms, int myinc_ms, int movestogo, int move_overhead_ms) {
+        if (mytime_ms <= 0)
+            return 1;
 
         int tleft = mytime_ms - std::max(0, move_overhead_ms);
-        if (tleft < 1) tleft = 1;
+        if (tleft < 1)
+            tleft = 1;
 
         if (tleft <= 200) {
             return std::max(1, tleft / 4);
@@ -243,7 +240,8 @@ private:
         }
 
         t = std::max(t, 5);
-        if (t > 2) t -= 2;
+        if (t > 2)
+            t -= 2;
         return t;
     }
 
@@ -263,23 +261,23 @@ private:
         });
     }
 
-private:
+  private:
     Position pos;
 
     // options cache
-    int  threads_ = 1;
-    int  multipv_ = 1;
+    int threads_ = 1;
+    int multipv_ = 1;
     bool ponder_ = false;
-    int  move_overhead_ms_ = 10;
+    int move_overhead_ms_ = 10;
     std::string syzygy_path_;
-    int  skill_level_ = 20;
+    int skill_level_ = 20;
 
     // ponder/search state
     std::atomic<bool> searching_{false};
     std::atomic<bool> pondering_{false};
-    std::atomic<int>  last_best_move_{0};
-    std::atomic<int>  last_ponder_move_{0};
+    std::atomic<int> last_best_move_{0};
+    std::atomic<int> last_ponder_move_{0};
 
     std::thread bg_thread_;
-    std::mutex  bg_mtx_;
+    std::mutex bg_mtx_;
 };

@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <algorithm>
 
-#include "types.h"   // Move 在这里
+#include "types.h" // Move 在这里
 
 namespace search {
 
@@ -14,10 +14,10 @@ enum TTFlag : uint8_t { TT_EXACT = 0, TT_ALPHA = 1, TT_BETA = 2 };
 
 struct TTEntry {
     uint64_t key = 0;
-    int16_t  depth = -1;
-    int16_t  score = 0;
-    uint8_t  flag  = TT_EXACT;
-    Move     best  = 0;
+    int16_t depth = -1;
+    int16_t score = 0;
+    uint8_t flag = TT_EXACT;
+    Move best = 0;
 };
 
 struct TT {
@@ -30,13 +30,15 @@ struct TT {
         size_t bytes = size_t(std::max(1, mb)) * 1024ULL * 1024ULL;
         size_t n = std::max<size_t>(1, bytes / sizeof(TTEntry));
         size_t p2 = 1;
-        while (p2 < n) p2 <<= 1;
+        while (p2 < n)
+            p2 <<= 1;
         table.assign(p2, TTEntry{});
         mask = p2 - 1;
     }
 
     inline TTEntry* probe(uint64_t key_) {
-        if (table.empty()) return &dummy;
+        if (table.empty())
+            return &dummy;
         return &table[size_t(key_) & mask];
     }
 
