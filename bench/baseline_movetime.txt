@@ -1,0 +1,158 @@
+﻿Baseline: movetime 2000; Threads=1; Hash=64; runs=5; warmup=1
+
+Run 1:
+Elderviolet-avx2 0.3 by Magnus
+id name Elderviolet-avx2 1.0
+id author Magnus
+option name Threads type spin default 1 min 1 max 256
+option name Hash type spin default 64 min 1 max 4096
+option name MultiPV type spin default 1 min 1 max 10
+option name Ponder type check default false
+option name Move Overhead type spin default 30 min 0 max 5000
+option name SyzygyPath type string default <empty>
+option name Skill Level type spin default 20 min 0 max 20
+uciok
+readyok
+info depth 1 seldepth 1 multipv 1 score cp 58 nodes 40 nps 40000 hashfull 0 tbhits 0 time 1 pv b1c3 
+info depth 2 seldepth 2 multipv 1 score cp 8 nodes 120 nps 120000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 
+info depth 3 seldepth 4 multipv 1 score cp 58 nodes 393 nps 393000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 g1f3 
+info depth 4 seldepth 6 multipv 1 score cp 13 nodes 669 nps 669000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 g1f3 e7e5 
+info depth 5 seldepth 6 multipv 1 score cp 51 nodes 1118 nps 559000 hashfull 0 tbhits 0 time 2 pv b1c3 b8c6 g1f3 e7e5 e2e4 
+info depth 6 seldepth 8 multipv 1 score cp 36 nodes 2693 nps 673250 hashfull 0 tbhits 0 time 4 pv d2d4 d7d5 g1f3 b8c6 b1c3 c8f5 
+info depth 7 seldepth 11 multipv 1 score cp 30 nodes 7255 nps 659545 hashfull 0 tbhits 0 time 11 pv d2d4 d7d5 g1f3 b8c6 b1c3 g8f6 c1f4 
+info depth 8 seldepth 12 multipv 1 score cp 10 nodes 17724 nps 656444 hashfull 0 tbhits 0 time 27 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 
+info depth 9 seldepth 14 multipv 1 score cp 15 nodes 33024 nps 673959 hashfull 1 tbhits 0 time 49 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 f1b5 
+info depth 10 seldepth 17 multipv 1 score cp 13 nodes 60668 nps 681662 hashfull 2 tbhits 0 time 89 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 f1d3 f5d3 
+info depth 11 seldepth 17 multipv 1 score cp 13 nodes 120648 nps 693379 hashfull 4 tbhits 0 time 174 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 f1d3 f5d3 
+info depth 12 seldepth 22 multipv 1 score cp 29 nodes 323070 nps 675878 hashfull 10 tbhits 0 time 478 pv d2d4 d7d5 c1f4 g8f6 e2e3 e7e6 g1f3 f8b4 c2c3 b4d6 f4d6 
+info depth 13 seldepth 22 multipv 1 score cp 29 nodes 413317 nps 682041 hashfull 13 tbhits 0 time 606 pv d2d4 d7d5 c1f4 g8f6 e2e3 e7e6 g1f3 f8b4 c2c3 b4d6 f4d6 
+info depth 14 seldepth 23 multipv 1 score cp 27 nodes 700051 nps 675073 hashfull 23 tbhits 0 time 1037 pv d2d4 d7d5 c1f4 g8f6 e2e3 e7e6 g1f3 b8c6 b1c3 f8b4 f1d3 b4c3 b2c3 e8g8 
+bestmove d2d4 ponder d7d5
+
+Parsed: depth=14 nodes=700051 nps=675073 hashfull=23
+
+Run 2:
+Elderviolet-avx2 0.3 by Magnus
+id name Elderviolet-avx2 1.0
+id author Magnus
+option name Threads type spin default 1 min 1 max 256
+option name Hash type spin default 64 min 1 max 4096
+option name MultiPV type spin default 1 min 1 max 10
+option name Ponder type check default false
+option name Move Overhead type spin default 30 min 0 max 5000
+option name SyzygyPath type string default <empty>
+option name Skill Level type spin default 20 min 0 max 20
+uciok
+readyok
+info depth 1 seldepth 1 multipv 1 score cp 58 nodes 40 nps 40000 hashfull 0 tbhits 0 time 1 pv b1c3 
+info depth 2 seldepth 2 multipv 1 score cp 8 nodes 120 nps 120000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 
+info depth 3 seldepth 4 multipv 1 score cp 58 nodes 393 nps 393000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 g1f3 
+info depth 4 seldepth 6 multipv 1 score cp 13 nodes 669 nps 669000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 g1f3 e7e5 
+info depth 5 seldepth 6 multipv 1 score cp 51 nodes 1118 nps 1118000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 g1f3 e7e5 e2e4 
+info depth 6 seldepth 8 multipv 1 score cp 36 nodes 2693 nps 673250 hashfull 0 tbhits 0 time 4 pv d2d4 d7d5 g1f3 b8c6 b1c3 c8f5 
+info depth 7 seldepth 11 multipv 1 score cp 30 nodes 7255 nps 725500 hashfull 0 tbhits 0 time 10 pv d2d4 d7d5 g1f3 b8c6 b1c3 g8f6 c1f4 
+info depth 8 seldepth 12 multipv 1 score cp 10 nodes 17724 nps 681692 hashfull 0 tbhits 0 time 26 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 
+info depth 9 seldepth 14 multipv 1 score cp 15 nodes 33024 nps 688000 hashfull 1 tbhits 0 time 48 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 f1b5 
+info depth 10 seldepth 17 multipv 1 score cp 13 nodes 60668 nps 697333 hashfull 2 tbhits 0 time 87 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 f1d3 f5d3 
+info depth 11 seldepth 17 multipv 1 score cp 13 nodes 120648 nps 697387 hashfull 4 tbhits 0 time 173 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 f1d3 f5d3 
+info depth 12 seldepth 22 multipv 1 score cp 29 nodes 323070 nps 685923 hashfull 10 tbhits 0 time 471 pv d2d4 d7d5 c1f4 g8f6 e2e3 e7e6 g1f3 f8b4 c2c3 b4d6 f4d6 
+info depth 13 seldepth 22 multipv 1 score cp 29 nodes 413317 nps 684299 hashfull 13 tbhits 0 time 604 pv d2d4 d7d5 c1f4 g8f6 e2e3 e7e6 g1f3 f8b4 c2c3 b4d6 f4d6 
+info depth 14 seldepth 23 multipv 1 score cp 27 nodes 700051 nps 667350 hashfull 23 tbhits 0 time 1049 pv d2d4 d7d5 c1f4 g8f6 e2e3 e7e6 g1f3 b8c6 b1c3 f8b4 f1d3 b4c3 b2c3 e8g8 
+bestmove d2d4 ponder d7d5
+
+Parsed: depth=14 nodes=700051 nps=667350 hashfull=23
+
+Run 3:
+Elderviolet-avx2 0.3 by Magnus
+id name Elderviolet-avx2 1.0
+id author Magnus
+option name Threads type spin default 1 min 1 max 256
+option name Hash type spin default 64 min 1 max 4096
+option name MultiPV type spin default 1 min 1 max 10
+option name Ponder type check default false
+option name Move Overhead type spin default 30 min 0 max 5000
+option name SyzygyPath type string default <empty>
+option name Skill Level type spin default 20 min 0 max 20
+uciok
+readyok
+info depth 1 seldepth 1 multipv 1 score cp 58 nodes 40 nps 40000 hashfull 0 tbhits 0 time 1 pv b1c3 
+info depth 2 seldepth 2 multipv 1 score cp 8 nodes 120 nps 120000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 
+info depth 3 seldepth 4 multipv 1 score cp 58 nodes 393 nps 393000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 g1f3 
+info depth 4 seldepth 6 multipv 1 score cp 13 nodes 669 nps 669000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 g1f3 e7e5 
+info depth 5 seldepth 6 multipv 1 score cp 51 nodes 1118 nps 559000 hashfull 0 tbhits 0 time 2 pv b1c3 b8c6 g1f3 e7e5 e2e4 
+info depth 6 seldepth 8 multipv 1 score cp 36 nodes 2693 nps 673250 hashfull 0 tbhits 0 time 4 pv d2d4 d7d5 g1f3 b8c6 b1c3 c8f5 
+info depth 7 seldepth 11 multipv 1 score cp 30 nodes 7255 nps 659545 hashfull 0 tbhits 0 time 11 pv d2d4 d7d5 g1f3 b8c6 b1c3 g8f6 c1f4 
+info depth 8 seldepth 12 multipv 1 score cp 10 nodes 17724 nps 681692 hashfull 0 tbhits 0 time 26 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 
+info depth 9 seldepth 14 multipv 1 score cp 15 nodes 33024 nps 688000 hashfull 1 tbhits 0 time 48 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 f1b5 
+info depth 10 seldepth 17 multipv 1 score cp 13 nodes 60668 nps 697333 hashfull 2 tbhits 0 time 87 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 f1d3 f5d3 
+info depth 11 seldepth 17 multipv 1 score cp 13 nodes 120648 nps 697387 hashfull 4 tbhits 0 time 173 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 f1d3 f5d3 
+info depth 12 seldepth 22 multipv 1 score cp 29 nodes 323070 nps 681582 hashfull 10 tbhits 0 time 474 pv d2d4 d7d5 c1f4 g8f6 e2e3 e7e6 g1f3 f8b4 c2c3 b4d6 f4d6 
+info depth 13 seldepth 22 multipv 1 score cp 29 nodes 413317 nps 680917 hashfull 13 tbhits 0 time 607 pv d2d4 d7d5 c1f4 g8f6 e2e3 e7e6 g1f3 f8b4 c2c3 b4d6 f4d6 
+info depth 14 seldepth 23 multipv 1 score cp 27 nodes 700051 nps 676377 hashfull 23 tbhits 0 time 1035 pv d2d4 d7d5 c1f4 g8f6 e2e3 e7e6 g1f3 b8c6 b1c3 f8b4 f1d3 b4c3 b2c3 e8g8 
+bestmove d2d4 ponder d7d5
+
+Parsed: depth=14 nodes=700051 nps=676377 hashfull=23
+
+Run 4:
+Elderviolet-avx2 0.3 by Magnus
+id name Elderviolet-avx2 1.0
+id author Magnus
+option name Threads type spin default 1 min 1 max 256
+option name Hash type spin default 64 min 1 max 4096
+option name MultiPV type spin default 1 min 1 max 10
+option name Ponder type check default false
+option name Move Overhead type spin default 30 min 0 max 5000
+option name SyzygyPath type string default <empty>
+option name Skill Level type spin default 20 min 0 max 20
+uciok
+readyok
+info depth 1 seldepth 1 multipv 1 score cp 58 nodes 40 nps 40000 hashfull 0 tbhits 0 time 1 pv b1c3 
+info depth 2 seldepth 2 multipv 1 score cp 8 nodes 120 nps 120000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 
+info depth 3 seldepth 4 multipv 1 score cp 58 nodes 393 nps 393000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 g1f3 
+info depth 4 seldepth 6 multipv 1 score cp 13 nodes 669 nps 669000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 g1f3 e7e5 
+info depth 5 seldepth 6 multipv 1 score cp 51 nodes 1118 nps 559000 hashfull 0 tbhits 0 time 2 pv b1c3 b8c6 g1f3 e7e5 e2e4 
+info depth 6 seldepth 8 multipv 1 score cp 36 nodes 2693 nps 673250 hashfull 0 tbhits 0 time 4 pv d2d4 d7d5 g1f3 b8c6 b1c3 c8f5 
+info depth 7 seldepth 11 multipv 1 score cp 30 nodes 7255 nps 725500 hashfull 0 tbhits 0 time 10 pv d2d4 d7d5 g1f3 b8c6 b1c3 g8f6 c1f4 
+info depth 8 seldepth 12 multipv 1 score cp 10 nodes 17724 nps 681692 hashfull 0 tbhits 0 time 26 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 
+info depth 9 seldepth 14 multipv 1 score cp 15 nodes 33024 nps 688000 hashfull 1 tbhits 0 time 48 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 f1b5 
+info depth 10 seldepth 17 multipv 1 score cp 13 nodes 60668 nps 705441 hashfull 2 tbhits 0 time 86 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 f1d3 f5d3 
+info depth 11 seldepth 17 multipv 1 score cp 13 nodes 120648 nps 670266 hashfull 4 tbhits 0 time 180 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 f1d3 f5d3 
+info depth 12 seldepth 22 multipv 1 score cp 29 nodes 323070 nps 656646 hashfull 10 tbhits 0 time 492 pv d2d4 d7d5 c1f4 g8f6 e2e3 e7e6 g1f3 f8b4 c2c3 b4d6 f4d6 
+info depth 13 seldepth 22 multipv 1 score cp 29 nodes 413317 nps 662366 hashfull 13 tbhits 0 time 624 pv d2d4 d7d5 c1f4 g8f6 e2e3 e7e6 g1f3 f8b4 c2c3 b4d6 f4d6 
+info depth 14 seldepth 23 multipv 1 score cp 27 nodes 700051 nps 658561 hashfull 23 tbhits 0 time 1063 pv d2d4 d7d5 c1f4 g8f6 e2e3 e7e6 g1f3 b8c6 b1c3 f8b4 f1d3 b4c3 b2c3 e8g8 
+bestmove d2d4 ponder d7d5
+
+Parsed: depth=14 nodes=700051 nps=658561 hashfull=23
+
+Run 5:
+Elderviolet-avx2 0.3 by Magnus
+id name Elderviolet-avx2 1.0
+id author Magnus
+option name Threads type spin default 1 min 1 max 256
+option name Hash type spin default 64 min 1 max 4096
+option name MultiPV type spin default 1 min 1 max 10
+option name Ponder type check default false
+option name Move Overhead type spin default 30 min 0 max 5000
+option name SyzygyPath type string default <empty>
+option name Skill Level type spin default 20 min 0 max 20
+uciok
+readyok
+info depth 1 seldepth 1 multipv 1 score cp 58 nodes 40 nps 40000 hashfull 0 tbhits 0 time 1 pv b1c3 
+info depth 2 seldepth 2 multipv 1 score cp 8 nodes 120 nps 120000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 
+info depth 3 seldepth 4 multipv 1 score cp 58 nodes 393 nps 393000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 g1f3 
+info depth 4 seldepth 6 multipv 1 score cp 13 nodes 669 nps 669000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 g1f3 e7e5 
+info depth 5 seldepth 6 multipv 1 score cp 51 nodes 1118 nps 1118000 hashfull 0 tbhits 0 time 1 pv b1c3 b8c6 g1f3 e7e5 e2e4 
+info depth 6 seldepth 8 multipv 1 score cp 36 nodes 2693 nps 673250 hashfull 0 tbhits 0 time 4 pv d2d4 d7d5 g1f3 b8c6 b1c3 c8f5 
+info depth 7 seldepth 11 multipv 1 score cp 30 nodes 7255 nps 659545 hashfull 0 tbhits 0 time 11 pv d2d4 d7d5 g1f3 b8c6 b1c3 g8f6 c1f4 
+info depth 8 seldepth 12 multipv 1 score cp 10 nodes 17724 nps 633000 hashfull 0 tbhits 0 time 28 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 
+info depth 9 seldepth 14 multipv 1 score cp 15 nodes 33024 nps 647529 hashfull 1 tbhits 0 time 51 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 f1b5 
+info depth 10 seldepth 17 multipv 1 score cp 13 nodes 60668 nps 645404 hashfull 2 tbhits 0 time 94 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 f1d3 f5d3 
+info depth 11 seldepth 17 multipv 1 score cp 13 nodes 120648 nps 648645 hashfull 4 tbhits 0 time 186 pv e2e3 b8c6 d2d4 d7d5 g1f3 g8f6 b1c3 c8f5 f1d3 f5d3 
+info depth 12 seldepth 22 multipv 1 score cp 29 nodes 323070 nps 635964 hashfull 10 tbhits 0 time 508 pv d2d4 d7d5 c1f4 g8f6 e2e3 e7e6 g1f3 f8b4 c2c3 b4d6 f4d6 
+info depth 13 seldepth 22 multipv 1 score cp 29 nodes 413317 nps 635872 hashfull 13 tbhits 0 time 650 pv d2d4 d7d5 c1f4 g8f6 e2e3 e7e6 g1f3 f8b4 c2c3 b4d6 f4d6 
+info depth 14 seldepth 23 multipv 1 score cp 27 nodes 700051 nps 635254 hashfull 23 tbhits 0 time 1102 pv d2d4 d7d5 c1f4 g8f6 e2e3 e7e6 g1f3 b8c6 b1c3 f8b4 f1d3 b4c3 b2c3 e8g8 
+bestmove d2d4 ponder d7d5
+
+Parsed: depth=14 nodes=700051 nps=635254 hashfull=23
+
+Average (runs 2-5): depth=14 nodes=700051 nps=659385.5 hashfull=23

@@ -11,3 +11,8 @@
 
 # Logs
 *.log
+
+# Bench outputs (keep baseline snapshots, ignore repeated runs)
+bench/run_*.txt
+bench/output_*.txt
+bench/*.log
