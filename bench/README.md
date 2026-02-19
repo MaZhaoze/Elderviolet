@@ -21,6 +21,7 @@ This writes:
 - `bench/baseline_depth.txt`
 
 Each file includes full engine output for 5 runs, plus parsed metrics and averages (runs 2-5).
+Each run is started with High priority and includes a short 200 ms pause before launch to reduce noise.
 
 ## Run a tagged benchmark (for optimization comparisons)
 
@@ -43,3 +44,7 @@ The script extracts the last `info depth ...` line from each run and parses:
 - `hashfull`
 
 Averages are computed over runs 2-5 to skip warm-up.
+
+Each run includes two extra lines in the output for traceability:
+- `run_timestamp <yyyy-MM-dd HH:mm:ss.fff>`
+- `run_priority High`

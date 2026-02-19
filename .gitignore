@@ -16,3 +16,5 @@
 bench/run_*.txt
 bench/output_*.txt
 bench/*.log
+bench/commitB_rerun*_*.txt
+bench/tmp/

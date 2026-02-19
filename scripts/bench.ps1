@@ -47,6 +47,7 @@ function Run-Bench {
     $metrics = @()
 
     for ($i = 1; $i -le $runs; $i++) {
+        Start-Sleep -Milliseconds 200
         $cmd = @"
 uci
 isready
@@ -57,10 +58,24 @@ position startpos
 go $Mode $Value
 quit
 "@
-        $output = @($cmd | & $Exe)
+
+        $stdinPath = [System.IO.Path]::GetTempFileName()
+        $stdoutPath = [System.IO.Path]::GetTempFileName()
+        $stderrPath = [System.IO.Path]::GetTempFileName()
+        Set-Content -Encoding UTF8 $stdinPath $cmd
+
+        $startStamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
+        $proc = Start-Process -FilePath $Exe -NoNewWindow -PassThru -RedirectStandardInput $stdinPath -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -Priority High
+        $proc.WaitForExit()
+
+        $output = Get-Content $stdoutPath
+        $stderr = Get-Content $stderrPath
+
+        Remove-Item -Force $stdinPath, $stdoutPath, $stderrPath
         $all += ,@{
             Run = $i
-            Output = $output
+            Output = @("run_timestamp $startStamp", "run_priority High") + $output
+            Stderr = $stderr
         }
         $metrics += ,(Parse-InfoLine -Lines $output)
     }
@@ -91,6 +106,12 @@ quit
         $lines.Add("Run $($all[$i].Run):")
         foreach ($line in $all[$i].Output) {
             $lines.Add([string]$line)
+        }
+        if ($all[$i].Stderr.Count -gt 0) {
+            $lines.Add("stderr:")
+            foreach ($line in $all[$i].Stderr) {
+                $lines.Add([string]$line)
+            }
         }
         $lines.Add("")
         $m = $metrics[$i]
