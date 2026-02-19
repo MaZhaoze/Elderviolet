@@ -1,6 +1,4 @@
-// =========================
-// Engine.h（完整替换）
-// =========================
+// Engine: owns position state and coordinates search / UCI-facing behavior.
 #pragma once
 #include <string>
 #include <vector>
@@ -18,9 +16,7 @@ class Engine {
   public:
     Engine() { pos.set_startpos(); }
 
-    ~Engine() {
-        stop(); // 确保退出时 join 线程
-    }
+    ~Engine() { stop(); }
 
     void new_game() {
         stop();
@@ -29,32 +25,32 @@ class Engine {
         last_ponder_move_.store(0, std::memory_order_relaxed);
     }
 
-    // ===== options =====
+    // Options exposed via UCI.
     void set_hash(int mb) { search::set_hash_mb(mb); }
 
     void set_threads(int n) {
         threads_ = std::max(1, n);
         search::set_threads(threads_);
     }
-    void set_multipv(int n) { multipv_ = std::max(1, n); } // 先存着（暂不实现 multipv 输出）
-    void set_ponder(bool b) { ponder_ = b; }               // 先存着（UCI go ponder 仍可用）
+    // Currently cached only (search output is single-PV).
+    void set_multipv(int n) { multipv_ = std::max(1, n); }
+    // Cached for UCI go ponder.
+    void set_ponder(bool b) { ponder_ = b; }
     void set_move_overhead(int ms) { move_overhead_ms_ = std::max(0, ms); }
     int move_overhead_ms() const { return move_overhead_ms_; }
-    void set_syzygy_path(const std::string& s) { syzygy_path_ = s; } // 先存着
+    void set_syzygy_path(const std::string& s) { syzygy_path_ = s; }
     void set_skill_level(int lv) { skill_level_ = std::max(0, std::min(20, lv)); }
     int skill_level() const { return skill_level_; }
 
-    // ===== position =====
+    // Position management.
     void set_startpos() { pos.set_startpos(); }
     void set_fen(const std::string& fen) { pos.set_fen(fen); }
     Color side_to_move() const { return pos.side; }
 
-    // ===== stop =====
+    // Stop any ongoing search and join background thread.
     void stop() {
-        // 发 stop 给 search
         search::stop();
 
-        // 若有后台线程，join
         if (searching_.load(std::memory_order_acquire)) {
             std::lock_guard<std::mutex> g(bg_mtx_);
             if (bg_thread_.joinable())
@@ -64,16 +60,14 @@ class Engine {
         }
     }
 
-    // ===== UCI: ponderhit =====
-    // 最小实现：停止 ponder 线程，拿到结果
+    // UCI: ponderhit. Stop background ponder search and keep its last result.
     void ponderhit() {
         if (!pondering_.load(std::memory_order_acquire))
             return;
-        stop(); // stop + join
-        // 结果已经写入 last_best_move_/last_ponder_move_
+        stop();
     }
 
-    // ===== apply uci move =====
+    // Apply a UCI move string if it matches a legal move.
     void push_uci_move(const std::string& uciMove) {
         std::vector<Move> moves;
         movegen::generate_legal(pos, moves);
@@ -87,16 +81,14 @@ class Engine {
         }
     }
 
-    // ===== getter =====
+    // Last ponder move from the most recent search.
     int get_last_ponder_move() const { return last_ponder_move_.load(std::memory_order_relaxed); }
 
-    // ===== go =====
-    // depth: >0 表示用户强制深度；<=0 表示未给 depth（time-based）
-    // movetime: >0 表示用户强制时长；<=0 表示未给 movetime（用 wtime/btime 算）
-    // ponder: go ponder（后台无限搜，不立即输出 bestmove）
+    // Start a search with UCI-style limits.
+    // Precedence: ponder > infinite > movetime > clock > depth.
     int go(int depth, int movetime, bool infinite, int wtime, int btime, int winc, int binc, int movestogo,
            bool ponder) {
-        // 如果正在后台搜，先停掉（避免重入）
+        // Stop any existing background search to avoid re-entrancy.
         stop();
 
         search::Limits lim{};
@@ -109,15 +101,15 @@ class Engine {
 
         const bool hasClock = (wtime > 0) || (btime > 0) || (winc > 0) || (binc > 0) || (movestogo > 0);
 
-        // go ponder：当作无限思考（直到 ponderhit/stop）
+        // Ponder: run an infinite search in the background and return no bestmove yet.
         if (ponder) {
             lim.infinite = true;
             lim.movetime_ms = 0;
             lim.depth = depth_given ? depth : 0;
 
-            start_background_search(lim); // 不输出 bestmove
+            start_background_search(lim);
             pondering_.store(true, std::memory_order_release);
-            return 0; // UCI 层收到 0 时不输出 bestmove
+            return 0; // UCI: do not output bestmove on ponder start.
         }
 
         // 1) infinite
@@ -131,7 +123,7 @@ class Engine {
             return (int)r.bestMove;
         }
 
-        // 2) movetime 绝对优先
+        // 2) movetime takes absolute precedence (after ponder/infinite).
         if (movetime_given) {
             lim.infinite = false;
             lim.movetime_ms = std::max(1, movetime);
@@ -142,7 +134,7 @@ class Engine {
             return (int)r.bestMove;
         }
 
-        // 3) clock 模式：没给 movetime 且真的有 clock 才算时间
+        // 3) Clock mode: use wtime/btime and increments if provided.
         if (hasClock) {
             int myTime = (pos.side == WHITE ? wtime : btime);
             int myInc = (pos.side == WHITE ? winc : binc);
@@ -159,15 +151,15 @@ class Engine {
             lim.movetime_ms = t_ms;
             lim.infinite = false;
         } else {
-            // 4) 纯 depth / 纯 go（无 clock 无 movetime）
+            // 4) Depth-only search (no clock, no movetime).
             lim.movetime_ms = 0;
             lim.infinite = false;
         }
 
-        // depth 策略
+        // Depth strategy.
         lim.depth = depth_given ? depth : 0;
 
-        // Skill Level：只在 “用户没给 depth 且是 clock 模式” 时弱化
+        // Skill Level: cap depth and time only in clock mode without a forced depth.
         if (!depth_given && hasClock && skill_level_ < 20) {
             int capDepth = 4 + skill_level_ / 2; // 0..19 -> 4..13
             capDepth = std::max(1, std::min(64, capDepth));
@@ -182,7 +174,7 @@ class Engine {
         return (int)r.bestMove;
     }
 
-    // ===== move->uci =====
+    // Convert an encoded move to UCI coordinate notation.
     std::string move_to_uci(int m) const { return move_to_uci((Move)m); }
 
     std::string move_to_uci(Move m) const {
@@ -212,7 +204,7 @@ class Engine {
     }
 
   private:
-    // time split for wtime/btime mode only (ms)
+    // Time allocation for clock mode only (ms).
     static inline int compute_think_ms(int mytime_ms, int myinc_ms, int movestogo, int move_overhead_ms) {
         if (mytime_ms <= 0)
             return 1;
@@ -246,14 +238,14 @@ class Engine {
     }
 
     void start_background_search(const search::Limits& lim) {
-        // 用当前 pos 的拷贝，不改 Engine 内部 pos
+        // Work on a copy of the current position to avoid mutating engine state.
         Position pcopy = pos;
 
         searching_.store(true, std::memory_order_release);
 
         std::lock_guard<std::mutex> g(bg_mtx_);
         bg_thread_ = std::thread([this, pcopy, lim]() mutable {
-            // 后台不输出 info（避免乱序）
+            // Background search does not emit info to avoid interleaving.
             search::Result r = search::think(pcopy, lim);
             last_best_move_.store((int)r.bestMove, std::memory_order_relaxed);
             last_ponder_move_.store((int)r.ponderMove, std::memory_order_relaxed);

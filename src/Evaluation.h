@@ -9,6 +9,8 @@
 
 namespace eval {
 
+// Static evaluation with MG/EG interpolation and lightweight structure terms.
+
 // =====================================================
 // Score (MG/EG) and helpers
 // =====================================================
@@ -162,9 +164,7 @@ static constexpr int BAD_BISHOP_EG = 4;
 
 static constexpr int CENTER_CONTROL_MG = 2;
 
-// =====================================================
-// ✅ Two sets for colors (picked by side-to-move)
-// =====================================================
+// Side-to-move weights for tempo and king safety tuning.
 struct Weights {
     int tempoMG;
 
@@ -179,6 +179,7 @@ struct Weights {
     int ksScalePct;
 };
 
+// Slight asymmetric tuning by side to move.
 static inline Weights weights_for(Color stm) {
     if (stm == WHITE) {
         return Weights{
@@ -203,9 +204,7 @@ static inline Weights weights_for(Color stm) {
     }
 }
 
-// =====================================================
-// Phase (0..256)
-// =====================================================
+// Phase (0..256) for MG/EG interpolation.
 inline int game_phase_256(const Position& pos) {
     int phase = 0;
     for (int sq = 0; sq < 64; sq++) {
@@ -233,9 +232,7 @@ inline int game_phase_256(const Position& pos) {
     return (phase * 256) / 24;
 }
 
-// =====================================================
-// Attack generation
-// =====================================================
+// Attack generation for king safety.
 struct AttackInfo {
     uint8_t attacks[2][64]{};
     uint8_t attackers[2][64]{};
@@ -307,6 +304,7 @@ static inline void gen_slider_attacks(const Position& pos, AttackInfo& ai, Color
     }
 }
 
+// Precompute per-square attack counts for both sides.
 static inline AttackInfo compute_attacks(const Position& pos) {
     AttackInfo ai{};
     static const int DIR_B[8] = {1, 1, 1, -1, -1, 1, -1, -1};
@@ -387,14 +385,13 @@ static inline int mobility_slider(const Position& pos, Color c, int from, const 
     return cnt;
 }
 
-// =====================================================
-// Pawn helpers
-// =====================================================
+// Pawn structure helpers.
 struct PawnInfo {
     int fileCount[2][8]{};
     uint8_t ranksMask[2][8]{};
 };
 
+// Aggregate pawn counts and ranks per file for both colors.
 static inline PawnInfo gather_pawns(const Position& pos) {
     PawnInfo pi{};
     for (int sq = 0; sq < 64; sq++) {
@@ -423,10 +420,7 @@ static inline int low_bit(uint8_t m) {
     return -1;
 }
 
-// =====================================================
-// Pawn evaluation: structure + passed + shield
-// (only modification: shield missing adds W.shieldMissingExtraMG)
-// =====================================================
+// Pawn structure evaluation: isolated/doubled/connected, passers, and king shields.
 static inline Score eval_pawns(const Position& pos, const PawnInfo& pi, int kingSqW, int kingSqB, const Weights& W) {
     Score s{0, 0};
 
@@ -653,7 +647,6 @@ static inline Score eval_pawns(const Position& pos, const PawnInfo& pi, int king
                             s.mg += sign * SHIELD_PAWN_MG;
                         } else {
                             int miss = SHIELD_MISSING_MG;
-                            // ✅ color-set tweak
                             miss += W.shieldMissingExtraMG;
                             s.mg -= sign * miss;
                         }
@@ -668,9 +661,7 @@ static inline Score eval_pawns(const Position& pos, const PawnInfo& pi, int king
     return s;
 }
 
-// =====================================================
-// King safety (classic): now uses W
-// =====================================================
+// King safety based on attack counts and open files.
 static inline Score eval_king_safety(const Position& pos, const PawnInfo& pi, const AttackInfo& ai, int kingSqW,
                                      int kingSqB, int phase, const Weights& W) {
     Score s{0, 0};
@@ -741,9 +732,7 @@ static inline Score eval_king_safety(const Position& pos, const PawnInfo& pi, co
     return s;
 }
 
-// =====================================================
-// Mobility + rook/queen typical squares + minor details
-// =====================================================
+// Piece activity and mobility (rooks, minors, queen).
 static inline Score eval_pieces(const Position& pos, const PawnInfo& pi, const AttackInfo& /*ai*/, int /*kingSqW*/,
                                 int /*kingSqB*/) {
     Score s{0, 0};
@@ -990,9 +979,7 @@ static inline Score eval_pieces(const Position& pos, const PawnInfo& pi, const A
     return s;
 }
 
-// =====================================================
-// Main evaluate()
-// =====================================================
+// Main evaluation entry: blends MG/EG by phase and applies tempo.
 inline int evaluate(const Position& pos) {
     int kingW = -1, kingB = -1;
     for (int sq = 0; sq < 64; sq++) {
@@ -1012,7 +999,6 @@ inline int evaluate(const Position& pos) {
     PawnInfo pi = gather_pawns(pos);
     AttackInfo ai = compute_attacks(pos);
 
-    // ✅ choose white/black set by side-to-move
     const Weights W = weights_for(pos.side);
 
     Score total{0, 0};
@@ -1023,7 +1009,6 @@ inline int evaluate(const Position& pos) {
 
     int score = (total.mg * phase + total.eg * (256 - phase)) / 256;
 
-    // ✅ tempo bias (only MG-ish)
     if (phase > 120) {
         score += (pos.side == WHITE ? +W.tempoMG : -W.tempoMG);
     }

@@ -7,6 +7,8 @@ namespace attacks {
 
 using Bitboard = uint64_t;
 
+// Precomputed attack tables and helper queries.
+
 static constexpr inline Bitboard bb_sq(int sq) {
     return (sq >= 0 && sq < 64) ? (1ULL << sq) : 0ULL;
 }
@@ -15,9 +17,7 @@ static constexpr inline Color flip(Color c) {
     return (c == WHITE) ? BLACK : WHITE;
 }
 
-// -------------------------------------
-// Precomputed leaper attacks (SF-style flavor)
-// -------------------------------------
+// Precomputed leaper attacks (knight/king/pawn).
 struct Tables {
     Bitboard knight[64]{};
     Bitboard king[64]{};
@@ -62,8 +62,7 @@ struct Tables {
 
             // Pawn
             {
-                // white pawn attacks up (r+1), black down (r-1) in your 0..7 rank system:
-                // In your movegen you likely use WHITE forward = +8, so rank increases.
+                // White pawns attack up (r+1), black pawns attack down (r-1).
                 Bitboard w = 0, b = 0;
 
                 // WHITE: (f-1,r+1) and (f+1,r+1)
@@ -89,14 +88,13 @@ struct Tables {
     }
 };
 
+// Lazy-initialized attack tables (thread-safe in C++11+).
 inline const Tables& T() {
     static Tables t;
     return t;
 }
 
-// -------------------------------------
-// Piece match helpers (no assumptions beyond your enum names)
-// -------------------------------------
+// Piece match helpers.
 static constexpr inline bool is_slider_bishop_queen(Piece p, Color c) {
     return (c == WHITE) ? (p == W_BISHOP || p == W_QUEEN) : (p == B_BISHOP || p == B_QUEEN);
 }
@@ -113,10 +111,7 @@ static constexpr inline bool is_pawn(Piece p, Color c) {
     return (c == WHITE) ? (p == W_PAWN) : (p == B_PAWN);
 }
 
-// -------------------------------------
-// Attackers collection (SF-like API)
-// Returns bitboard of squares containing byColor pieces that attack sq
-// -------------------------------------
+// Returns a bitboard of squares containing byColor pieces that attack sq.
 inline Bitboard attackers_to_bb(const Position& pos, int sq, Color byColor) {
     if ((unsigned)sq >= 64u)
         return 0ULL;
@@ -126,9 +121,9 @@ inline Bitboard attackers_to_bb(const Position& pos, int sq, Color byColor) {
     const int f = file_of(sq);
     const int r = rank_of(sq);
 
-    // --- pawn attackers (reverse lookup, faster/cleaner) ---
+    // Pawn attackers (reverse lookup).
     if (byColor == WHITE) {
-        // White pawn attacks up; so attacker must be at (f±1, r-1)
+        // White pawn attacks up; attacker must be at (f-1, r-1) or (f+1, r-1).
         if ((unsigned)(r - 1) < 8u) {
             if ((unsigned)(f - 1) < 8u) {
                 int from = make_sq(f - 1, r - 1);
@@ -142,7 +137,7 @@ inline Bitboard attackers_to_bb(const Position& pos, int sq, Color byColor) {
             }
         }
     } else {
-        // Black pawn attacks down; attacker must be at (f±1, r+1)
+        // Black pawn attacks down; attacker must be at (f-1, r+1) or (f+1, r+1).
         if ((unsigned)(r + 1) < 8u) {
             if ((unsigned)(f - 1) < 8u) {
                 int from = make_sq(f - 1, r + 1);
@@ -181,7 +176,7 @@ inline Bitboard attackers_to_bb(const Position& pos, int sq, Color byColor) {
         }
     }
 
-    // --- sliders: use (df,dr) stepping (no wrap hacks) ---
+    // Sliders: step by file/rank deltas, stop at first blocker.
     auto scan_dir = [&](int df, int dr, bool diag) {
         int ff = f + df;
         int rr = r + dr;
@@ -218,6 +213,7 @@ inline Bitboard attackers_to_bb(const Position& pos, int sq, Color byColor) {
     return atk;
 }
 
+// Count attackers by popcount.
 inline int attackers_to_count(const Position& pos, int sq, Color byColor) {
     Bitboard b = attackers_to_bb(pos, sq, byColor);
     return (int)__builtin_popcountll(b);
@@ -230,6 +226,7 @@ inline bool is_square_attacked(const Position& pos, int sq, Color byColor) {
     return attackers_to_bb(pos, sq, byColor) != 0ULL;
 }
 
+// True if sideToCheck's king is attacked.
 inline bool in_check(const Position& pos, Color sideToCheck) {
     int ksq = pos.king_square(sideToCheck);
     if (ksq < 0)

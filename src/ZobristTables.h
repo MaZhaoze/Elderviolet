@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <random>
 
-// 只放表，不要引用 Position，避免循环 include
+// Zobrist tables only. Keep Position out to avoid include cycles.
 struct ZobristTables {
     uint64_t psq[16][64]{};
     uint64_t sideKey = 0;
@@ -10,6 +10,7 @@ struct ZobristTables {
     uint64_t epKey[8]{};
 
     ZobristTables() {
+        // Fixed seed so keys are deterministic across runs.
         std::mt19937_64 rng(20260126ULL);
         auto R = [&]() { return rng(); };
 

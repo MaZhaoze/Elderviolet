@@ -1,6 +1,4 @@
-// =========================
-// uci.h（完整替换）
-// =========================
+// UCI protocol handling and command parsing.
 #pragma once
 #include <iostream>
 #include <sstream>
@@ -13,9 +11,7 @@
 
 namespace uci {
 
-// =====================
-// helpers
-// =====================
+// Parsing helpers.
 static inline std::string ltrim(std::string s) {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) { return !std::isspace(ch); }));
     return s;
@@ -267,6 +263,7 @@ static inline void cmd_go(const std::vector<std::string>& tokens, Engine& engine
 
     const bool hasClock = provided_wtime || provided_btime || provided_winc || provided_binc || provided_mtg;
 
+    // If no limits are provided, fall back to a short fixed movetime.
     if (!provided_depth && !provided_movetime && !infinite && !hasClock && !ponder) {
         movetime = 1000;
         provided_movetime = true;
@@ -284,7 +281,7 @@ static inline void cmd_go(const std::vector<std::string>& tokens, Engine& engine
     int bestMove =
         engine.go(depth_arg, movetime_arg, infinite, wtime_arg, btime_arg, winc_arg, binc_arg, mtg_arg, ponder);
 
-    // ✅ go ponder：不输出 bestmove，等 ponderhit/stop 再输出
+    // Ponder searches do not output bestmove until ponderhit.
     if (ponder) {
         return;
     }
@@ -299,9 +296,7 @@ static inline void cmd_go(const std::vector<std::string>& tokens, Engine& engine
     std::cout.flush();
 }
 
-// =====================
-// main loop
-// =====================
+// Main UCI input loop.
 static inline void loop(Engine& engine) {
     std::ios::sync_with_stdio(false);
     std::cin.tie(nullptr);
@@ -328,17 +323,10 @@ static inline void loop(Engine& engine) {
         } else if (cmd == "go") {
             cmd_go(tokens, engine);
         } else if (cmd == "ponderhit") {
-            // ✅ 最小 ponderhit：停止 ponder 线程并输出一次 bestmove
             engine.ponderhit();
-
-            // 这里输出用“上次后台计算出的 bestmove”
-            // 注意：我们的 Engine 最小实现里没单独暴露 last_best_move_，
-            // 所以最简单策略：ponderhit 后让 GUI 重新发 go（很多 GUI 会这么做）
-            // 如果你想严格：我也可以再给你加 get_last_best_move()，这里直接打印。
-            // 先不打印，遵循“GUI 再发 go”的兼容做法。
+            // Many GUIs will send a fresh "go" after ponderhit.
         } else if (cmd == "stop") {
             engine.stop();
-            // stop 后通常 GUI 会再发 go 或直接结束；这里不额外输出
         } else if (cmd == "quit") {
             engine.stop();
             break;

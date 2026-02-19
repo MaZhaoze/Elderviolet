@@ -1,6 +1,4 @@
-// ============================
-// MoveGeneration.h (REPLACE)
-// ============================
+// Pseudo-legal move generation and legality filtering.
 #pragma once
 #include <vector>
 #include <cmath>
@@ -12,9 +10,7 @@
 
 namespace movegen {
 
-// =====================
-// helpers
-// =====================
+// Basic helpers for board boundaries.
 inline bool on_board(int sq) {
     return sq >= 0 && sq < 64;
 }
@@ -25,6 +21,8 @@ inline bool diag_step_ok(int from, int to) {
     return std::abs(file_of(to) - file_of(from)) == 1;
 }
 
+// Push a move if target is on board and not occupied by our own piece.
+// Sets capture flag automatically when destination is occupied.
 inline void push_move(const Position& pos, std::vector<Move>& moves, int from, int to, int flags = 0, int promo = 0) {
     if (!on_board(to))
         return;
@@ -48,9 +46,8 @@ inline void add_promo(const Position& pos, std::vector<Move>& moves, int from, i
     push_move(pos, moves, from, to, flags | MF_PROMO, 4);
 }
 
-// =====================
-// pseudo-legal generator (includes castling + EP)
-// =====================
+// Pseudo-legal generator (includes castling and en passant).
+// Does not filter out moves that leave the king in check.
 inline void generate_pseudo_legal(const Position& pos, std::vector<Move>& moves) {
     moves.clear();
     Color us = pos.side;
@@ -223,9 +220,7 @@ inline void generate_pseudo_legal(const Position& pos, std::vector<Move>& moves)
     }
 }
 
-// =====================
-// castle legality (attack path check)
-// =====================
+// Castling path legality: king cannot move through or into check.
 inline bool legal_castle_path_ok(const Position& pos, Move m) {
     int from = from_sq(m);
     int to = to_sq(m);
@@ -270,10 +265,8 @@ inline bool legal_castle_path_ok(const Position& pos, Move m) {
     return true;
 }
 
-// =====================
-// LEGAL move generator (kept for root only / debug)
-// NOTE: don't call this in every negamax node for speed
-// =====================
+// Legal move generator (used for root and validation).
+// Avoid calling in deep search nodes due to cost.
 inline void generate_legal(Position& pos, std::vector<Move>& legal) {
     static thread_local std::vector<Move> pseudo;
     generate_pseudo_legal(pos, pseudo);
@@ -298,6 +291,7 @@ inline void generate_legal(Position& pos, std::vector<Move>& legal) {
     }
 }
 
+// Legal captures only (used by quiescence and tactical filters).
 inline void generate_legal_captures(Position& pos, std::vector<Move>& caps) {
     std::vector<Move> legal;
     generate_legal(pos, legal);

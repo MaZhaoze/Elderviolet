@@ -14,7 +14,7 @@
 
 #include "types.h"
 #include "Position.h"
-#include "ZobristTables.h" // ✅ 只放表 + inline g_zob（推荐）
+#include "ZobristTables.h"
 #include "MoveGeneration.h"
 #include "Attack.h"
 #include "Evaluation.h"
@@ -22,6 +22,8 @@
 #include "see_full.h"
 
 namespace search {
+
+// Search implementation: iterative deepening, PVS, pruning, and Lazy SMP.
 
 inline bool is_white_piece_s(Piece p) {
     int v = (int)p;
@@ -32,9 +34,7 @@ inline bool is_black_piece_s(Piece p) {
     return v >= 9 && v <= 14;
 }
 
-// =====================
-// time management
-// =====================
+// Simple time allocation heuristic for clock mode.
 static inline int compute_think_time_ms(int mytime_ms, int myinc_ms, int movestogo) {
     if (mytime_ms <= 0)
         return -1;
@@ -56,6 +56,7 @@ static inline int compute_think_time_ms(int mytime_ms, int myinc_ms, int movesto
     return t;
 }
 
+// Lightweight sanity check used by search and TT probing.
 inline bool move_sane_basic(const Position& pos, Move m) {
     if (!m)
         return false;
@@ -93,9 +94,7 @@ inline bool move_sane_basic(const Position& pos, Move m) {
     return true;
 }
 
-// =====================================
-// SearchInfo + globals (HEADER SAFE)
-// =====================================
+// SearchInfo for UCI info output (header-only safe).
 struct SearchInfo {
     int depth = 0;
     int seldepth = 0;
@@ -167,7 +166,7 @@ struct Limits {
 
 struct Result {
     Move bestMove = 0;
-    Move ponderMove = 0; // ✅ PV[1]，没有就 0
+    Move ponderMove = 0; // PV[1], or 0 if unknown
     int score = 0;
     uint64_t nodes = 0;
 };
@@ -247,9 +246,7 @@ inline std::string move_to_uci(Move m) {
     return s;
 }
 
-// =======================================
-// Hash TT sampling
-// =======================================
+// Approximate hash occupancy by sampling a fixed prefix.
 inline int hashfull_permille_fallback(const TT& tt) {
     if (tt.table.empty())
         return 0;
@@ -265,11 +262,7 @@ inline int hashfull_permille_fallback(const TT& tt) {
     return int((filled * 1000ULL) / SAMPLE);
 }
 
-// =====================================
-// ✅ Shared TT
-// probe_copy 无锁读（提速）
-// store 仍然加锁
-// =====================================
+// Thread-safe TT wrapper (striped locks).
 struct SharedTT {
     TT tt;
 
@@ -280,6 +273,7 @@ struct SharedTT {
 
     inline int lock_index(uint64_t key) const { return int((key ^ (key >> 32)) & (LOCKS - 1)); }
 
+    // Lock-free read copy; may be slightly stale.
     inline bool probe_copy(uint64_t key, TTEntry& out) {
         TTEntry* e = tt.probe(key);
         if (!e || e->key != key)
@@ -288,6 +282,7 @@ struct SharedTT {
         return true;
     }
 
+    // Locked store; replace on key mismatch or when depth is at least as deep.
     inline void store(uint64_t key, Move best, int16_t score, int16_t depth, uint8_t flag) {
         std::lock_guard<std::mutex> g(locks[lock_index(key)]);
         TTEntry* e = tt.probe(key);
@@ -311,22 +306,19 @@ struct SharedTT {
     inline int hashfull_permille() const { return hashfull_permille_fallback(tt); }
 };
 
-// =====================================
-// Searcher
-// =====================================
+// Per-thread searcher state (history, killers, node counters).
 struct Searcher {
     SharedTT* stt = nullptr;
 
     Move killer[2][128]{};
     int history[2][64][64]{};
 
-    // ✅ Countermove + Continuation history（2-ply）
     Move countermove[64][64]{};
     int contHist[2][64][64][64][64]{};
 
     uint64_t nodes = 0;
 
-    // ✅✅✅ 正确计数器：nodes_batch 永远只做余数 [0, NODE_BATCH)
+    // Batch node counting to reduce atomic contention.
     uint64_t nodes_batch = 0;
     static constexpr uint64_t NODE_BATCH = 4096; // power of two
 
@@ -345,13 +337,12 @@ struct Searcher {
         }
     }
 
+    // Count a node and periodically publish to the global counter.
     inline void add_node() {
         nodes++;
 
-        // 余数++
         nodes_batch++;
 
-        // 满 batch：上报一次并清零（绝不重复）
         if (nodes_batch == NODE_BATCH) {
             g_nodes_total.fetch_add(NODE_BATCH, std::memory_order_relaxed);
             nodes_batch = 0;
@@ -422,6 +413,7 @@ struct Searcher {
         return vv - av;
     }
 
+    // Move ordering: TT move, captures (SEE), killers, history, and heuristics.
     inline int move_score(const Position& pos, Move m, Move ttMove, int ply, int prevFrom, int prevTo) {
         ply = std::min(ply, 127);
 
@@ -503,9 +495,7 @@ struct Searcher {
         return sc;
     }
 
-    // =====================================
-    // qsearch
-    // =====================================
+    // Quiescence search: captures/promotions and limited checks.
     int qsearch(Position& pos, int alpha, int beta, int ply, int lastTo, bool lastWasCap) {
         add_node();
         selDepth = std::max(selDepth, ply);
@@ -661,9 +651,7 @@ struct Searcher {
         return alpha;
     }
 
-    // =====================================
-    // Null move (MUST keep zobKey consistent)
-    // =====================================
+    // Null move pruning; must keep zobKey consistent.
     struct NullMoveUndo {
         int ep;
         Color side;
@@ -734,6 +722,7 @@ struct Searcher {
         return ok;
     }
 
+    // Follow TT best moves to build a PV line, stopping on repetition or invalid moves.
     inline void follow_tt_pv(Position& pos, int maxLen, PVLine& out) {
         out.len = 0;
         if (maxLen <= 0)
@@ -1129,6 +1118,7 @@ struct Searcher {
         return bestScore;
     }
 
+    // Iterative deepening with aspiration windows and root move ordering.
     Result think(Position& pos, const Limits& lim, bool emitInfo) {
         keyPly = 0;
         keyStack[keyPly++] = pos.zobKey;
@@ -1148,7 +1138,7 @@ struct Searcher {
         if (rootMoves.empty()) {
             flush_nodes_batch();
             res.bestMove = 0;
-            res.ponderMove = 0; // ✅
+            res.ponderMove = 0;
             res.score = 0;
             res.nodes = nodes;
             return res;
@@ -1161,7 +1151,7 @@ struct Searcher {
         constexpr int PV_MAX = 128;
         constexpr int ROOT_ORDER_K = 10;
 
-        // ✅✅✅ 正确 nodes/nps：nodesAll = global + 本线程余数 nodes_batch
+        // Combine global nodes and local batch for consistent info output.
         auto now_time_nodes_nps = [&]() {
             int t = (int)(now_ms() - startT);
             if (t < 1)
@@ -1176,6 +1166,7 @@ struct Searcher {
 
         PVLine rootPV;
 
+        // Root search with PVS and late-move reductions (root-specific heuristics).
         auto root_search = [&](int d, int alpha, int beta, Move& outBestMove, int& outBestScore, PVLine& outPV,
                                bool& outOk) {
             outOk = true;
@@ -1361,23 +1352,19 @@ struct Searcher {
             }
         }
 
-        // ✅ 一定 flush 余数（不会重复）
         flush_nodes_batch();
 
         res.bestMove = bestMove;
         res.score = bestScore;
         res.nodes = nodes;
 
-        // ✅✅✅ ponderMove = PV[1]（即 rootPV 第二手）
         res.ponderMove = (rootPV.len >= 2 ? rootPV.m[1] : 0);
 
         return res;
     }
 };
 
-// =====================================
-// THREADS (Lazy SMP) — shared TT
-// =====================================
+// Thread pool / Lazy SMP globals.
 inline std::atomic<int> g_threads{1};
 inline int g_hash_mb = 64;
 
@@ -1426,9 +1413,7 @@ inline void set_threads(int n) {
     }
 }
 
-// =====================================
-// global API
-// =====================================
+// Public search API (single-thread or Lazy SMP).
 inline Result think(Position& pos, const Limits& lim) {
     ensure_pool();
 
@@ -1438,7 +1423,6 @@ inline Result think(Position& pos, const Limits& lim) {
     int n = threads();
     if (n <= 1) {
         Result r = g_pool[0]->think(pos, lim, true);
-        // ✅ 全局已经包含 flush 过的余数
         r.nodes = g_nodes_total.load(std::memory_order_relaxed);
         return r;
     }
@@ -1446,6 +1430,7 @@ inline Result think(Position& pos, const Limits& lim) {
     std::vector<std::thread> workers;
     workers.reserve(n - 1);
 
+    // Worker threads search independent copies of the root position.
     for (int i = 1; i < n; i++) {
         Position pcopy = pos;
         workers.emplace_back([i, pcopy, lim]() mutable { g_pool[i]->think(pcopy, lim, false); });

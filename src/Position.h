@@ -8,9 +8,9 @@
 #include "types.h"
 #include "ZobristTables.h"
 
-// =====================
-// Castling rights bits
-// =====================
+// Position representation and move make/undo with incremental Zobrist.
+
+// Castling rights bitmask.
 enum CastlingRight : int {
     CR_NONE = 0,
     CR_WK = 1 << 0, // White king side
@@ -19,14 +19,11 @@ enum CastlingRight : int {
     CR_BQ = 1 << 3  // Black queen side
 };
 
-// =====================
-// Undo info for unmake move
-// =====================
+// Snapshot of state needed to undo a move.
 struct Undo {
     Piece moved = NO_PIECE;
     Piece captured = NO_PIECE;
 
-    // ✅关键：保存走棋前轮到谁
     Color prevSide = WHITE;
 
     int prevCastling = CR_NONE;
@@ -34,20 +31,17 @@ struct Undo {
     int prevHalfmove = 0;
     int prevFullmove = 1;
 
-    // ✅ Zobrist key before move (fast undo)
-    uint64_t prevKey = 0;
+    uint64_t prevKey = 0; // zobrist before move
 
-    // For en passant capture
+    // En passant capture square (if any).
     int epCapturedSq = -1;
 
-    // For castling rook move
+    // Castling rook move (if any).
     int rookFrom = -1;
     int rookTo = -1;
 };
 
-// =====================
-// Position
-// =====================
+// Board state. Squares are 0..63 (a1 = 0), zobKey is incremental.
 struct Position {
     Piece board[64];
     Color side = WHITE;
@@ -57,17 +51,15 @@ struct Position {
     int halfmoveClock = 0;
     int fullmoveNumber = 1;
 
-    // ✅ Incremental Zobrist key (O(1) access)
-    uint64_t zobKey = 0;
+    uint64_t zobKey = 0; // incremental Zobrist key
 
     Position() {
         clear();
         set_startpos();
     }
 
-    // ---------------------
-    // basic helpers
-    // ---------------------
+    // Basic helpers.
+    // Reset to an empty position (no pieces, no rights).
     void clear() {
         for (int i = 0; i < 64; i++)
             board[i] = NO_PIECE;
@@ -111,7 +103,7 @@ struct Position {
     }
 
     static inline int algebraic_to_sq(const std::string& s) {
-        // "e3" -> square index
+        // "e3" -> square index, or -1 if invalid.
         if (s.size() != 2)
             return -1;
         char f = s[0], r = s[1];
@@ -131,10 +123,7 @@ struct Position {
         return s;
     }
 
-    // ---------------------
-    // Zobrist (full recompute)
-    // Only used on init / debug
-    // ---------------------
+    // Full Zobrist recompute; used at init or for debugging.
     inline void recompute_zobrist() {
         uint64_t k = 0;
         for (int sq = 0; sq < 64; sq++) {
@@ -154,10 +143,8 @@ struct Position {
         zobKey = k;
     }
 
-    // ---------------------
-    // Zobrist (incremental apply after do_move)
-    // Assumes board/side/castlingRights/epSquare already updated
-    // ---------------------
+    // Incremental Zobrist update after do_move.
+    // Assumes board/side/castlingRights/epSquare already updated.
     inline void apply_zobrist_delta_after_move(const Undo& u, Move m) {
         uint64_t k = u.prevKey;
 
@@ -220,9 +207,7 @@ struct Position {
         zobKey = k;
     }
 
-    // ---------------------
-    // startpos
-    // ---------------------
+    // Standard initial position.
     void set_startpos() {
         clear();
 
@@ -259,11 +244,8 @@ struct Position {
         recompute_zobrist();
     }
 
-    // ---------------------
-    // FEN parser (full)
-    // fen fields:
+    // FEN parser (full):
     // 1 board / 2 side / 3 castling / 4 ep / 5 halfmove / 6 fullmove
-    // ---------------------
     void set_fen(const std::string& fen) {
         clear();
 
@@ -326,9 +308,7 @@ struct Position {
         recompute_zobrist();
     }
 
-    // ---------------------
-    // Castling rights update helpers
-    // ---------------------
+    // Castling rights update helpers.
     inline void remove_castling_for_king(Color c) {
         if (c == WHITE)
             castlingRights &= ~(CR_WK | CR_WQ);
@@ -348,23 +328,15 @@ struct Position {
             castlingRights &= ~CR_BQ;
     }
 
-    // ---------------------
-    // do_move / undo_move
-    // Supports:
-    // - normal
-    // - capture
-    // - promotion
-    // - en passant capture (MF_EP)
-    // - castling (MF_CASTLE)
-    // ---------------------
+    // Make/unmake a move. Supports normal, capture, promotion, en passant, castling.
     Undo do_move(Move m) {
         Undo u;
-        u.prevSide = side; // ✅关键：保存 side
+        u.prevSide = side; // restore side exactly on undo
         u.prevCastling = castlingRights;
         u.prevEpSquare = epSquare;
         u.prevHalfmove = halfmoveClock;
         u.prevFullmove = fullmoveNumber;
-        u.prevKey = zobKey; // ✅保存 key（fast undo + delta base）
+        u.prevKey = zobKey; // base for fast undo and incremental key update
 
         const int from = from_sq(m);
         const int to = to_sq(m);
@@ -486,7 +458,6 @@ struct Position {
         if (us == BLACK)
             fullmoveNumber++;
 
-        // ✅ Apply incremental Zobrist update (O(1))
         apply_zobrist_delta_after_move(u, m);
 
         return u;
@@ -502,11 +473,9 @@ struct Position {
         halfmoveClock = u.prevHalfmove;
         fullmoveNumber = u.prevFullmove;
 
-        // ✅关键：直接恢复 side（不要推断！）
-        side = u.prevSide;
+        side = u.prevSide; // do not infer; use saved side
 
         // --- undo castling rook move ---
-        // 用 rookFrom/rookTo 判断即可（稳定）
         if (u.rookFrom != -1 && u.rookTo != -1) {
             board[u.rookFrom] = board[u.rookTo];
             board[u.rookTo] = NO_PIECE;
@@ -517,7 +486,7 @@ struct Position {
             board[from] = u.moved;
             board[to] = NO_PIECE; // EP target square was empty
             board[u.epCapturedSq] = u.captured;
-            zobKey = u.prevKey; // ✅ fast restore key
+            zobKey = u.prevKey; // fast restore key
             return;
         }
 
@@ -525,8 +494,7 @@ struct Position {
         board[from] = u.moved;
         board[to] = u.captured;
 
-        // ✅ fast restore key (always correct)
-        zobKey = u.prevKey;
+        zobKey = u.prevKey; // fast restore key (always correct)
     }
 
     // For debugging / sanity

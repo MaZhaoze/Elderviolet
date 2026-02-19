@@ -5,9 +5,9 @@
 #include "types.h"
 #include "Position.h"
 
-// ============================================================
-// Internal helpers: bitboard on 0..63 squares (a1=0)
-// ============================================================
+// Static exchange evaluation (SEE) helpers.
+
+// Internal helpers: bitboard on 0..63 squares (a1=0).
 using U64 = uint64_t;
 
 static inline U64 bb_sq(int sq) {
@@ -28,7 +28,6 @@ static inline int pop_lsb(U64& b) {
 }
 
 static inline int piece_value_pt(PieceType pt) {
-    // 你可调：这里用常见中局子力
     switch (pt) {
     case PAWN:
         return 100;
@@ -50,7 +49,7 @@ static inline int piece_value(Piece p) {
     return piece_value_pt(type_of(p));
 }
 
-// 升变编码：0 none, 1N 2B 3R 4Q
+// Convert promotion code to piece type.
 static inline PieceType promo_to_pt(int promoCode) {
     if (promoCode == 1)
         return KNIGHT;
@@ -63,7 +62,7 @@ static inline PieceType promo_to_pt(int promoCode) {
     return NONE;
 }
 
-// 生成 occupancy（内部 bitboard）
+// Occupancy bitboard from a board array.
 static inline U64 occ_from_board(const Piece board[64]) {
     U64 occ = 0;
     for (int sq = 0; sq < 64; ++sq)
@@ -208,8 +207,8 @@ static inline U64 color_attackers(U64 attackers, const Piece b[64], Color c) {
     return res;
 }
 
+// Return the least valuable attacker square for the given side.
 static inline int least_valuable_attacker_sq(U64 attackersSide, const Piece b[64]) {
-    // 返回攻击者里“最便宜”的那一个 square；若空返回 -1
     int bestSq = -1;
     int bestV = 1e9;
 
@@ -228,6 +227,7 @@ static inline int least_valuable_attacker_sq(U64 attackersSide, const Piece b[64
     return bestSq;
 }
 
+// Detect a pawn promotion by diagonal capture.
 static inline bool pawn_promo_by_move(Color side, int fromSq, int toSq) {
     // pawn diagonal capture to last rank
     int tr = rank_of(toSq);
@@ -238,14 +238,8 @@ static inline bool pawn_promo_by_move(Color side, int fromSq, int toSq) {
     }
 }
 
-// ============================================================
-// Stockfish-like swap SEE
-// returns net material gain for side to move in pos making move m
-// ============================================================
-// ============================================================
-// Correct swap SEE (Stockfish-style, mailbox attackers recompute)
-// returns net gain for side to move if it plays m
-// ============================================================
+// Full swap-based SEE (mailbox attackers recompute).
+// Returns net material gain for side to move if it plays m.
 static inline int see_full(const Position& pos, Move m) {
     if (!m)
         return 0;
@@ -365,6 +359,7 @@ static inline int see_full(const Position& pos, Move m) {
     return gain[0];
 }
 
+// Threshold helper: true if full SEE >= threshold.
 static inline bool see_ge(const Position& pos, Move m, int threshold) {
     return see_full(pos, m) >= threshold;
 }

@@ -3,19 +3,17 @@
 #include <cstdint>
 #include <algorithm>
 
-#include "types.h" // Move 在这里
+#include "types.h" // Move encoding.
 
 namespace search {
 
-// =====================
-// TT
-// =====================
+// Transposition table (single replacement bucket).
 enum TTFlag : uint8_t { TT_EXACT = 0, TT_ALPHA = 1, TT_BETA = 2 };
 
 struct TTEntry {
-    uint64_t key = 0;
-    int16_t depth = -1;
-    int16_t score = 0;
+    uint64_t key = 0;   // full zobrist key
+    int16_t depth = -1; // search depth in plies
+    int16_t score = 0;  // stored score (TT-adjusted)
     uint8_t flag = TT_EXACT;
     Move best = 0;
 };
@@ -24,7 +22,7 @@ struct TT {
     std::vector<TTEntry> table;
     uint64_t mask = 0;
 
-    TTEntry dummy; // ✅ probe 永不返回 nullptr
+    TTEntry dummy; // Returned when the table is empty.
 
     void resize_mb(int mb) {
         size_t bytes = size_t(std::max(1, mb)) * 1024ULL * 1024ULL;
@@ -39,6 +37,7 @@ struct TT {
     inline TTEntry* probe(uint64_t key_) {
         if (table.empty())
             return &dummy;
+        // Power-of-two size: index is fast mask.
         return &table[size_t(key_) & mask];
     }
 
