@@ -1,7 +1,7 @@
-
 <p align="center">
-  <img src="logo.png" alt="Elderviolet logo" width="260">
+  <img src="logo.jpg" alt="Elderviolet logo" width="260">
 </p>
+
 
 <h1 align="center">Elderviolet</h1>
 
