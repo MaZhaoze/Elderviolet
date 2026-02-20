@@ -38,14 +38,14 @@ struct TT {
     }
 
     inline TTEntry* probe(uint64_t key_) {
-        if (table.empty()) [[unlikely]]
+        if (table.empty())
             return &dummy;
         // Power-of-two size: index is fast mask.
         return &table[size_t(key_) & mask];
     }
 
     inline void clear() {
-        if (!table.empty()) [[likely]] {
+        if (!table.empty()) {
             std::fill(table.begin(), table.end(), TTEntry{});
         }
     }
