@@ -112,6 +112,15 @@ inline int selDepth = 0;
 static constexpr int INF = 30000;
 static constexpr int MATE = 29000;
 
+// Ply/depth limits (centralized).
+static constexpr int MAX_PLY = 128;
+static constexpr int MAX_PV = 128;
+static constexpr int MAX_QPLY = 64;
+static constexpr int KEY_STACK_MAX = 256;
+
+static_assert(MAX_PV <= MAX_PLY, "PV length must not exceed MAX_PLY.");
+static_assert(KEY_STACK_MAX >= MAX_PLY + 4, "Key stack must cover MAX_PLY with headroom.");
+
 // =====================================
 // Color helpers
 // =====================================
@@ -310,7 +319,7 @@ struct SharedTT {
 struct Searcher {
     SharedTT* stt = nullptr;
 
-    Move killer[2][128]{};
+    Move killer[2][MAX_PLY]{};
     int history[2][64][64]{};
 
     Move countermove[64][64]{};
@@ -351,7 +360,7 @@ struct Searcher {
     }
 
     struct PVLine {
-        Move m[128]{};
+        Move m[MAX_PV]{};
         int len = 0;
     };
 
@@ -368,10 +377,8 @@ struct Searcher {
 
     inline uint64_t key_of(const Position& pos) const { return pos.zobKey; }
 
-    uint64_t keyStack[256]{};
+    uint64_t keyStack[KEY_STACK_MAX]{};
     int keyPly = 0;
-
-    static constexpr int MAX_PLY = 128;
 
     std::vector<Move> plyMoves[MAX_PLY];
     std::vector<int> plyScores[MAX_PLY];
@@ -422,7 +429,7 @@ struct Searcher {
 
     // Move ordering: TT move, captures (SEE), killers, history, and heuristics.
     inline int move_score(const Position& pos, Move m, Move ttMove, int ply, int prevFrom, int prevTo) {
-        ply = std::min(ply, 127);
+        ply = std::min(ply, MAX_PLY - 1);
 
         if (m == ttMove)
             return 1000000000;
@@ -510,7 +517,7 @@ struct Searcher {
         const Color us = pos.side;
         const bool inCheck = attacks::in_check(pos, us);
 
-        if (ply >= 64)
+        if (ply >= MAX_QPLY)
             return eval::evaluate(pos);
 
         int stand = -INF;
@@ -735,11 +742,11 @@ struct Searcher {
         if (maxLen <= 0)
             return;
 
-        Undo undos[128];
-        Move um[128];
+        Undo undos[MAX_PV];
+        Move um[MAX_PV];
         int ucnt = 0;
 
-        uint64_t seen[128];
+        uint64_t seen[MAX_PV];
         int seenN = 0;
 
         auto seen_before = [&](uint64_t k) {
@@ -751,12 +758,12 @@ struct Searcher {
 
         Move prev = 0;
 
-        for (int i = 0; i < maxLen && out.len < 128; i++) {
+        for (int i = 0; i < maxLen && out.len < MAX_PV; i++) {
             const uint64_t k = pos.zobKey;
 
             if (seen_before(k))
                 break;
-            if (seenN < 128)
+            if (seenN < MAX_PV)
                 seen[seenN++] = k;
 
             TTEntry te{};
@@ -808,7 +815,7 @@ struct Searcher {
         add_node();
         selDepth = std::max(selDepth, ply);
 
-        if (ply >= 128)
+        if (ply >= MAX_PLY)
             return eval::evaluate(pos);
 
         const Color us = pos.side;
@@ -1073,8 +1080,8 @@ struct Searcher {
                 bestMove = m;
 
                 bestPV.m[0] = m;
-                bestPV.len = std::min(127, childPV.len + 1);
-                for (int k = 0; k < childPV.len && k + 1 < 128; k++) {
+                bestPV.len = std::min(MAX_PV - 1, childPV.len + 1);
+                for (int k = 0; k < childPV.len && k + 1 < MAX_PV; k++) {
                     bestPV.m[k + 1] = childPV.m[k];
                 }
             }
@@ -1083,7 +1090,7 @@ struct Searcher {
                 alpha = score;
 
             if (alpha >= beta) {
-                if (isQuiet && ply < 128) {
+                if (isQuiet && ply < MAX_PLY) {
                     if (killer[0][ply] != m) {
                         killer[1][ply] = killer[0][ply];
                         killer[0][ply] = m;
@@ -1156,7 +1163,7 @@ struct Searcher {
         int bestScore = -INF;
 
         constexpr int ASP_START = 35;
-        constexpr int PV_MAX = 128;
+        constexpr int PV_MAX = MAX_PV;
         constexpr int ROOT_ORDER_K = 10;
 
         // Combine global nodes and local batch for consistent info output.
@@ -1259,7 +1266,7 @@ struct Searcher {
 
                     iterPV.m[0] = m;
                     iterPV.len = std::min(127, childPV.len + 1);
-                    for (int k = 0; k < childPV.len && k + 1 < 128; k++) {
+                    for (int k = 0; k < childPV.len && k + 1 < MAX_PV; k++) {
                         iterPV.m[k + 1] = childPV.m[k];
                     }
                 }
