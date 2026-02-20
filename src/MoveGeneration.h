@@ -295,8 +295,10 @@ inline void generate_legal(Position& pos, std::vector<Move>& legal) {
 
 // Legal captures only (used by quiescence and tactical filters).
 inline void generate_legal_captures(Position& pos, std::vector<Move>& caps) {
-    std::vector<Move> legal;
-    legal.reserve(256);
+    static thread_local std::vector<Move> legal;
+    legal.clear();
+    if (legal.capacity() < 256)
+        legal.reserve(256);
     generate_legal(pos, legal);
 
     caps.clear();
