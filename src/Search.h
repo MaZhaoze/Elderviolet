@@ -786,7 +786,7 @@ struct Searcher {
             out.m[out.len++] = m;
             prev = m;
 
-            if (time_up())
+            if (time_up()) [[unlikely]]
                 break;
         }
 
@@ -801,7 +801,7 @@ struct Searcher {
                 bool lastWasCap, PVLine& pv) {
         pv.len = 0;
 
-        if (time_up())
+        if (time_up()) [[unlikely]]
             return alpha;
 
         add_node();
@@ -905,7 +905,7 @@ struct Searcher {
 
                     undo_null_move(pos, nu);
 
-                    if (time_up())
+                    if (time_up()) [[unlikely]]
                         return alpha;
                     if (score >= beta)
                         return beta;
@@ -961,7 +961,7 @@ struct Searcher {
         int quietMovesSearched = 0;
 
         for (int kk = 0; kk < (int)order.size(); kk++) {
-            if (time_up())
+            if (time_up()) [[unlikely]]
                 return alpha;
 
             Move m = moves[order[kk]];
@@ -1061,7 +1061,7 @@ struct Searcher {
 
             pos.undo_move(m, u);
 
-            if (time_up())
+            if (time_up()) [[unlikely]]
                 return alpha;
 
             if (score > bestScore) {
@@ -1186,7 +1186,7 @@ struct Searcher {
             int rootLegalsSearched = 0;
 
             for (int i = 0; i < (int)rootMoves.size(); i++) {
-                if (time_up()) {
+                if (time_up()) [[unlikely]] {
                     outOk = false;
                     break;
                 }
@@ -1244,7 +1244,7 @@ struct Searcher {
 
                 pos.undo_move(m, u);
 
-                if (time_up()) {
+                if (time_up()) [[unlikely]] {
                     outOk = false;
                     break;
                 }
@@ -1275,7 +1275,7 @@ struct Searcher {
         };
 
         for (int d = 1; d <= maxDepth; d++) {
-            if (time_up())
+            if (time_up()) [[unlikely]]
                 break;
 
             if (bestMove) {
