@@ -523,7 +523,6 @@ struct Searcher {
         }
 
         auto& moves = plyMoves[ply];
-        moves.clear();
         movegen::generate_pseudo_legal(pos, moves);
 
         auto& list = plyQList[ply];
@@ -916,8 +915,6 @@ struct Searcher {
 
         auto& moves = plyMoves[ply];
         auto& scores = plyScores[ply];
-        moves.clear();
-        scores.clear();
 
         movegen::generate_legal(pos, moves);
 
@@ -932,7 +929,6 @@ struct Searcher {
             scores[i] = move_score(pos, moves[i], ttMove, ply, prevFrom, prevTo);
 
         auto& order = plyOrder[ply];
-        order.clear();
         order.resize(moves.size());
         for (int i = 0; i < (int)moves.size(); i++)
             order[i] = i;
