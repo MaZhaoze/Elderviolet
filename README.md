@@ -1,9 +1,7 @@
 <p align="center">
-  <img src="logo.jpg" alt="Elderviolet logo" width="260">
+  <img src="logo.png" alt="Elderviolet logo" width="260">
 </p>
 
-
-<h1 align="center">Elderviolet</h1>
 
 <p align="center">
   A UCI chess engine written in <b>pure C++</b>.
@@ -11,12 +9,53 @@
   Focused on search strength, clean architecture, and informative UCI output.
 </p>
 
+
+
 <p align="center">
-  <img src="https://img.shields.io/github/license/MaZhaoze/Elderviolet?style=for-the-badge" alt="License">
-  <img src="https://img.shields.io/github/commits-since/MaZhaoze/Elderviolet/latest?style=for-the-badge" alt="Commits since latest">
-  <img src="https://img.shields.io/badge/language-C++-6f42c1?style=for-the-badge" alt="Language">
+  <!-- Base -->
+  <img src="https://img.shields.io/github/license/MaZhaoze/Elderviolet?style=for-the-badge&color=6f42c1&labelColor=2b0a3d" alt="License">
+  <img src="https://img.shields.io/github/stars/MaZhaoze/Elderviolet?style=for-the-badge&color=6f42c1&labelColor=2b0a3d" alt="Stars">
+  <img src="https://img.shields.io/github/forks/MaZhaoze/Elderviolet?style=for-the-badge&color=6f42c1&labelColor=2b0a3d" alt="Forks">
+  <img src="https://img.shields.io/github/watchers/MaZhaoze/Elderviolet?style=for-the-badge&color=6f42c1&labelColor=2b0a3d" alt="Watchers">
 </p>
 
+<p align="center">
+  <!-- Activity -->
+  <img src="https://img.shields.io/github/last-commit/MaZhaoze/Elderviolet?style=for-the-badge&color=4c6ef5&labelColor=2b0a3d" alt="Last commit">
+  <img src="https://img.shields.io/github/commit-activity/m/MaZhaoze/Elderviolet?style=for-the-badge&color=4c6ef5&labelColor=2b0a3d" alt="Commit activity">
+  <img src="https://img.shields.io/github/commits-since/MaZhaoze/Elderviolet/latest?style=for-the-badge&color=4c6ef5&labelColor=2b0a3d" alt="Commits since latest">
+  <img src="https://img.shields.io/github/repo-size/MaZhaoze/Elderviolet?style=for-the-badge&color=4c6ef5&labelColor=2b0a3d" alt="Repo size">
+</p>
+
+<p align="center">
+  <!-- Issues / PRs -->
+  <img src="https://img.shields.io/github/issues/MaZhaoze/Elderviolet?style=for-the-badge&color=845ef7&labelColor=2b0a3d" alt="Issues">
+  <img src="https://img.shields.io/github/issues-closed/MaZhaoze/Elderviolet?style=for-the-badge&color=845ef7&labelColor=2b0a3d" alt="Issues closed">
+  <img src="https://img.shields.io/github/issues-pr/MaZhaoze/Elderviolet?style=for-the-badge&color=845ef7&labelColor=2b0a3d" alt="Open PRs">
+  <img src="https://img.shields.io/github/issues-pr-closed/MaZhaoze/Elderviolet?style=for-the-badge&color=845ef7&labelColor=2b0a3d" alt="Closed PRs">
+</p>
+
+<p align="center">
+  <!-- Releases / Downloads -->
+  <img src="https://img.shields.io/github/v/release/MaZhaoze/Elderviolet?style=for-the-badge&color=20c997&labelColor=2b0a3d" alt="Release">
+  <img src="https://img.shields.io/github/release-date/MaZhaoze/Elderviolet?style=for-the-badge&color=20c997&labelColor=2b0a3d" alt="Release date">
+  <img src="https://img.shields.io/github/downloads/MaZhaoze/Elderviolet/total?style=for-the-badge&color=20c997&labelColor=2b0a3d" alt="Downloads">
+</p>
+
+<p align="center">
+  <!-- Tech stack -->
+  <img src="https://img.shields.io/badge/language-C%2B%2B-12b886?style=for-the-badge&labelColor=2b0a3d" alt="C++">
+  <img src="https://img.shields.io/badge/build-manual-12b886?style=for-the-badge&labelColor=2b0a3d" alt="Build manual">
+  <img src="https://img.shields.io/badge/domain-Chess%20Engine-12b886?style=for-the-badge&labelColor=2b0a3d" alt="Chess Engine">
+  <img src="https://img.shields.io/badge/UCI-compatible-12b886?style=for-the-badge&labelColor=2b0a3d" alt="UCI">
+</p>
+
+<p align="center">
+  <!-- Optional flex / identity -->
+  <img src="https://img.shields.io/badge/status-active-f06595?style=for-the-badge&labelColor=2b0a3d" alt="Status">
+  <img src="https://img.shields.io/badge/theme-Elderviolet-f06595?style=for-the-badge&labelColor=2b0a3d" alt="Theme">
+  <img src="https://img.shields.io/badge/author-MaZhaoze-f06595?style=for-the-badge&labelColor=2b0a3d" alt="Author">
+</p>
 ---
 
 ## Overview
