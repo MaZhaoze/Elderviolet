@@ -276,7 +276,7 @@ struct SharedTT {
     // Lock-free read copy; may be slightly stale.
     inline bool probe_copy(uint64_t key, TTEntry& out) {
         TTEntry* e = tt.probe(key);
-        if (!e || e->key != key)
+        if (e->key != key) [[unlikely]]
             return false;
         out = *e;
         return true;
