@@ -222,13 +222,12 @@ inline char rank_char(int r) {
 inline std::string move_to_uci(Move m) {
     int f = from_sq(m), t = to_sq(m);
 
-    std::string s;
-    s.reserve(5);
-
-    s.push_back(file_char(file_of(f)));
-    s.push_back(rank_char(rank_of(f)));
-    s.push_back(file_char(file_of(t)));
-    s.push_back(rank_char(rank_of(t)));
+    char buf[6];
+    buf[0] = file_char(file_of(f));
+    buf[1] = rank_char(rank_of(f));
+    buf[2] = file_char(file_of(t));
+    buf[3] = rank_char(rank_of(t));
+    int len = 4;
 
     int pr = promo_of(m);
     if (pr) {
@@ -241,9 +240,11 @@ inline std::string move_to_uci(Move m) {
             pc = 'r';
         else
             pc = 'q';
-        s.push_back(pc);
+        buf[4] = pc;
+        len = 5;
     }
-    return s;
+
+    return std::string(buf, buf + len);
 }
 
 // Approximate hash occupancy by sampling a fixed prefix.
