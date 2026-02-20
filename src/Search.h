@@ -1349,7 +1349,7 @@ struct Searcher {
                 std::cout << "\n";
 
                 int curMs = t;
-                if (d <= 2 || curMs - lastFlushMs >= 50) {
+                if (curMs - lastFlushMs >= 50) {
                     std::cout.flush();
                     lastFlushMs = curMs;
                 }
