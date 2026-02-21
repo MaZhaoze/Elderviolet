@@ -1328,25 +1328,22 @@ struct Searcher {
         for (int i = 0; i < (int)moves.size(); i++)
             scores[i] = move_score(pos, moves[i], ttMove, ply, prevFrom, prevTo);
 
-        auto& order = plyOrder[ply];
-        order.resize(moves.size());
-        for (int i = 0; i < (int)moves.size(); i++)
-            order[i] = i;
-
-        int K = std::min<int>(g_params.nodeOrderK, (int)order.size());
+        int K = std::min<int>(g_params.nodeOrderK, (int)moves.size());
 
         for (int i = 0; i < K; i++) {
             int bi = i;
-            int bs = scores[order[i]];
-            for (int j = i + 1; j < (int)order.size(); j++) {
-                int sj = scores[order[j]];
+            int bs = scores[i];
+            for (int j = i + 1; j < (int)moves.size(); j++) {
+                int sj = scores[j];
                 if (sj > bs) {
                     bs = sj;
                     bi = j;
                 }
             }
-            if (bi != i)
-                std::swap(order[i], order[bi]);
+            if (bi != i) {
+                std::swap(moves[i], moves[bi]);
+                std::swap(scores[i], scores[bi]);
+            }
         }
 
         int bestScore = -INF;
@@ -1368,11 +1365,11 @@ struct Searcher {
             ss.ttMoveAvail++;
         }
 
-        for (int kk = 0; kk < (int)order.size(); kk++) {
+        for (int kk = 0; kk < (int)moves.size(); kk++) {
             if (stop_or_time_up(false)) [[unlikely]]
                 return alpha;
 
-            Move m = moves[order[kk]];
+            Move m = moves[kk];
             const int curFrom = from_sq(m);
             const int curTo = to_sq(m);
 
@@ -1773,22 +1770,22 @@ struct Searcher {
                     std::swap(rootMoves[0], *it);
             }
 
-            std::vector<int> order(rootMoves.size());
+            std::vector<int> rootScores(rootMoves.size());
             for (int i = 0; i < (int)rootMoves.size(); i++)
-                order[i] = move_score(pos, rootMoves[i], bestMove, 0, -1, -1);
+                rootScores[i] = move_score(pos, rootMoves[i], bestMove, 0, -1, -1);
 
             const int K = std::min<int>(g_params.rootOrderK, (int)rootMoves.size());
             for (int i = 0; i < K; i++) {
-                int bi = i, bs = order[i];
+                int bi = i, bs = rootScores[i];
                 for (int j = i + 1; j < (int)rootMoves.size(); j++) {
-                    if (order[j] > bs) {
-                        bs = order[j];
+                    if (rootScores[j] > bs) {
+                        bs = rootScores[j];
                         bi = j;
                     }
                 }
                 if (bi != i) {
                     std::swap(rootMoves[i], rootMoves[bi]);
-                    std::swap(order[i], order[bi]);
+                    std::swap(rootScores[i], rootScores[bi]);
                 }
             }
 
