@@ -169,7 +169,14 @@ struct SearchParams {
 };
 
 inline SearchParams g_params{};
-inline constexpr bool kCollectSearchStats = false;
+inline std::atomic<bool> g_collect_stats{false};
+
+inline void set_collect_stats(bool on) {
+    g_collect_stats.store(on, std::memory_order_relaxed);
+}
+inline bool collect_stats() {
+    return g_collect_stats.load(std::memory_order_relaxed);
+}
 
 // =====================================
 // Color helpers
@@ -379,6 +386,8 @@ struct Searcher {
     uint64_t nodes = 0;
 
     struct PruneStats {
+        uint64_t razorPrune = 0;
+        uint64_t rfpPrune = 0;
         uint64_t quietFutility = 0;
         uint64_t quietLimit = 0;
         uint64_t capSeePrune = 0;
@@ -392,14 +401,20 @@ struct Searcher {
         uint64_t nodePv = 0;
         uint64_t nodeCut = 0;
         uint64_t nodeAll = 0;
+        uint64_t nodeByType[3]{};
+        uint64_t legalByType[3]{};
         uint64_t ttProbe = 0;
         uint64_t ttHit = 0;
         uint64_t ttCut = 0;
         uint64_t ttBest = 0;
+        uint64_t ttMoveAvail = 0;
+        uint64_t ttMoveFirst = 0;
         uint64_t firstMoveTried = 0;
         uint64_t firstMoveFailHigh = 0;
         uint64_t lmrTried = 0;
         uint64_t lmrResearched = 0;
+        uint64_t lmrReducedByBucket[4]{};   // killer/counter/quiet-high/quiet-low
+        uint64_t lmrResearchedByBucket[4]{}; // killer/counter/quiet-high/quiet-low
         uint64_t nullTried = 0;
         uint64_t nullCut = 0;
         uint64_t nullVerifyTried = 0;
@@ -408,6 +423,16 @@ struct Searcher {
         uint64_t futilitySkip = 0;
         uint64_t totalLegalTried = 0;
         uint64_t moveLoopNodes = 0;
+        uint64_t rootIters = 0;
+        uint64_t rootFirstBestOrCut = 0;
+        uint64_t rootBestSrc[5]{}; // tt/cap/killer/counter/quiet
+        uint64_t rootPvsReSearch = 0;
+        uint64_t rootLmrReSearch = 0;
+        uint64_t rootNonFirstTried = 0;
+        uint64_t aspFail = 0;
+        uint64_t proxyReversalAfterNull = 0;
+        uint64_t proxyReversalAfterRfp = 0;
+        uint64_t proxyReversalAfterRazor = 0;
         inline void clear() { *this = SearchStats{}; }
     } ss;
 
@@ -599,6 +624,24 @@ struct Searcher {
 
         reduction = std::min(reduction, depth - 2);
         return std::max(0, reduction);
+    }
+
+    inline int node_type_index(NodeContext::NodeType t) const {
+        if (t == NodeContext::PV)
+            return 0;
+        if (t == NodeContext::CUT)
+            return 1;
+        return 2;
+    }
+
+    inline int lmr_bucket(bool isKiller, bool isCounter, int quietScore) const {
+        if (isKiller)
+            return 0;
+        if (isCounter)
+            return 1;
+        if (quietScore >= g_params.lmrHistoryLow)
+            return 2;
+        return 3;
     }
 
     inline NodeContext make_node_context(const Position& pos, int depth, int alpha, int beta, int ply, bool inCheck,
@@ -1089,10 +1132,10 @@ struct Searcher {
         } _kp(keyPly);
 
         TTEntry te{};
-        if constexpr (kCollectSearchStats)
+        if (collect_stats())
             ss.ttProbe++;
         bool ttHit = stt->probe_copy(key, te);
-        if constexpr (kCollectSearchStats) {
+        if (collect_stats()) {
             if (ttHit)
                 ss.ttHit++;
         }
@@ -1106,7 +1149,7 @@ struct Searcher {
                 const bool allowTTCut = (!pvNode || !g_params.ttPvConservative || te.flag == TT_EXACT);
 
                 if (te.flag == TT_EXACT && allowTTCut) {
-                    if constexpr (kCollectSearchStats)
+                    if (collect_stats())
                         ss.ttCut++;
                     if (ttMove && is_legal_move_here(pos, ttMove)) {
                         pv.m[0] = ttMove;
@@ -1116,7 +1159,7 @@ struct Searcher {
                 }
 
                 if (te.flag == TT_ALPHA && allowTTCut && ttScore <= alpha) {
-                    if constexpr (kCollectSearchStats)
+                    if (collect_stats())
                         ss.ttCut++;
                     if (pv.len == 0 && ttMove && is_legal_move_here(pos, ttMove)) {
                         pv.m[0] = ttMove;
@@ -1126,7 +1169,7 @@ struct Searcher {
                 }
 
                 if (te.flag == TT_BETA && allowTTCut && ttScore >= beta) {
-                    if constexpr (kCollectSearchStats)
+                    if (collect_stats())
                         ss.ttCut++;
                     if (pv.len == 0 && ttMove && is_legal_move_here(pos, ttMove)) {
                         pv.m[0] = ttMove;
@@ -1158,14 +1201,17 @@ struct Searcher {
         if (g_params.enableRazoring && !inCheck && ply > 0 && depth <= g_params.razorDepthMax) {
             const int razorMargin = razor_margin(depth, improving);
             if (staticEval + razorMargin <= alpha) {
+                ps.razorPrune++;
                 return qsearch(pos, alpha, beta, ply, lastTo, lastWasCap);
             }
         }
 
         if (g_params.enableRfp && !inCheck && depth <= g_params.rfpDepthMax && ply > 0) {
             const int rfpMargin = rfp_margin(depth, improving);
-            if (staticEval - rfpMargin >= beta)
+            if (staticEval - rfpMargin >= beta) {
+                ps.rfpPrune++;
                 return beta;
+            }
         }
 
         if (g_params.enableIIR && !inCheck && ply > 0 && !pvNode && !ttHit && depth >= g_params.iirMinDepth) {
@@ -1173,7 +1219,8 @@ struct Searcher {
             ps.iirApplied++;
         }
 
-        if constexpr (kCollectSearchStats) {
+        int nTypeIdx = 2;
+        if (collect_stats()) {
             NodeContext ctx = make_node_context(pos, depth, alpha, beta, ply, inCheck, staticEval, improving, ttHit, te);
             if (ctx.nodeType == NodeContext::PV)
                 ss.nodePv++;
@@ -1181,6 +1228,8 @@ struct Searcher {
                 ss.nodeCut++;
             else
                 ss.nodeAll++;
+            nTypeIdx = node_type_index(ctx.nodeType);
+            ss.nodeByType[nTypeIdx]++;
         }
 
         if (g_params.enableNullMove && !inCheck && depth >= g_params.nullMinDepth && ply > 0) {
@@ -1189,7 +1238,7 @@ struct Searcher {
                 R = std::min(R, depth - 1);
 
                 if (beta < MATE - g_params.nullMateGuard && alpha > -MATE + g_params.nullMateGuard) {
-                    if constexpr (kCollectSearchStats)
+                    if (collect_stats())
                         ss.nullTried++;
                     NullMoveUndo nu;
                     do_null_move(pos, nu);
@@ -1202,7 +1251,7 @@ struct Searcher {
                     if (time_up()) [[unlikely]]
                         return alpha;
                     if (score >= beta) {
-                        if constexpr (kCollectSearchStats)
+                        if (collect_stats())
                             ss.nullCut++;
                         return beta;
                     }
@@ -1255,8 +1304,15 @@ struct Searcher {
 
         int legalMovesSearched = 0;
         int quietMovesSearched = 0;
-        if constexpr (kCollectSearchStats)
+        if (collect_stats())
             ss.moveLoopNodes++;
+
+        bool ttAvail = false;
+        bool ttFirstAccounted = false;
+        if (collect_stats() && ttHit && ttMove) {
+            ttAvail = true;
+            ss.ttMoveAvail++;
+        }
 
         for (int kk = 0; kk < (int)order.size(); kk++) {
             if (time_up()) [[unlikely]]
@@ -1275,7 +1331,7 @@ struct Searcher {
                 const int futMargin = quiet_futility_margin(depth, improving);
                 if (staticEval + futMargin <= alpha) {
                     ps.quietFutility++;
-                    if constexpr (kCollectSearchStats)
+                    if (collect_stats())
                         ss.futilitySkip++;
                     continue;
                 }
@@ -1286,7 +1342,7 @@ struct Searcher {
                 const int limit = quiet_limit_for_depth(depth);
                 if (quietMovesSearched >= limit) {
                     ps.quietLimit++;
-                    if constexpr (kCollectSearchStats)
+                    if (collect_stats())
                         ss.lmpSkip++;
                     continue;
                 }
@@ -1315,8 +1371,15 @@ struct Searcher {
             }
 
             legalMovesSearched++;
-            if constexpr (kCollectSearchStats)
+            if (collect_stats())
                 ss.totalLegalTried++;
+            if (collect_stats())
+                ss.legalByType[nTypeIdx]++;
+            if (collect_stats() && ttAvail && !ttFirstAccounted && legalMovesSearched == 1) {
+                if (m == ttMove)
+                    ss.ttMoveFirst++;
+                ttFirstAccounted = true;
+            }
             if (isQuiet)
                 quietMovesSearched++;
 
@@ -1327,7 +1390,7 @@ struct Searcher {
             PVLine childPV;
 
             if (legalMovesSearched == 1) {
-                if constexpr (kCollectSearchStats)
+                if (collect_stats())
                     ss.firstMoveTried++;
                 score = -negamax(pos, depth - 1, -beta, -alpha, ply + 1, curFrom, curTo, nextLastTo, nextLastWasCap,
                                  childPV);
@@ -1338,8 +1401,15 @@ struct Searcher {
                                                       curFrom, curTo);
                     if (reduction > 0) {
                         ps.lmrApplied++;
-                        if constexpr (kCollectSearchStats)
+                        if (collect_stats()) {
                             ss.lmrTried++;
+                            int ci = color_index(us);
+                            int qh = history[ci][curFrom][curTo] / 2;
+                            bool isK = (m == killer[0][std::min(ply, 127)] || m == killer[1][std::min(ply, 127)]);
+                            bool isC = ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u &&
+                                        m == countermove[prevFrom][prevTo]);
+                            ss.lmrReducedByBucket[lmr_bucket(isK, isC, qh)]++;
+                        }
                     }
                 }
 
@@ -1351,8 +1421,15 @@ struct Searcher {
                     -negamax(pos, rd, -alpha - 1, -alpha, ply + 1, curFrom, curTo, nextLastTo, nextLastWasCap, childPV);
 
                 if (score > alpha && reduction > 0 && rd != depth - 1) {
-                    if constexpr (kCollectSearchStats)
+                    if (collect_stats()) {
                         ss.lmrResearched++;
+                        int ci = color_index(us);
+                        int qh = history[ci][curFrom][curTo] / 2;
+                        bool isK = (m == killer[0][std::min(ply, 127)] || m == killer[1][std::min(ply, 127)]);
+                        bool isC = ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u &&
+                                    m == countermove[prevFrom][prevTo]);
+                        ss.lmrResearchedByBucket[lmr_bucket(isK, isC, qh)]++;
+                    }
                     PVLine childPV2;
                     score = -negamax(pos, depth - 1, -alpha - 1, -alpha, ply + 1, curFrom, curTo, nextLastTo,
                                      nextLastWasCap, childPV2);
@@ -1390,7 +1467,7 @@ struct Searcher {
 
             if (alpha >= beta) {
                 ps.betaCutoff++;
-                if constexpr (kCollectSearchStats) {
+                if (collect_stats()) {
                     if (legalMovesSearched == 1)
                         ss.firstMoveFailHigh++;
                 }
@@ -1427,7 +1504,7 @@ struct Searcher {
 
             stt->store(key, bestMove, (int16_t)store, (int16_t)depth, (uint8_t)flag);
         }
-        if constexpr (kCollectSearchStats) {
+        if (collect_stats()) {
             if (ttHit && bestMove == ttMove && bestMove)
                 ss.ttBest++;
         }
@@ -1488,6 +1565,18 @@ struct Searcher {
         PVLine rootPV;
         PVLine rootPVLegal;
 
+        auto classify_root_source = [&](Move m, Move ttM) {
+            if (m && ttM && m == ttM)
+                return 0; // tt
+            const bool cap = is_capture(pos, m) || (flags_of(m) & MF_EP) || promo_of(m);
+            if (cap)
+                return 1; // capture
+            if (m == killer[0][0] || m == killer[1][0])
+                return 2; // killer
+            // Root has no natural predecessor, so countermove at root is generally unavailable.
+            return 4; // quiet
+        };
+
         // Root search with PVS and late-move reductions (root-specific heuristics).
         auto root_search = [&](int d, int alpha, int beta, Move& outBestMove, int& outBestScore, PVLine& outPV,
                                bool& outOk) {
@@ -1500,6 +1589,8 @@ struct Searcher {
             int iterBestScore = -INF;
             PVLine iterPV;
             iterPV.len = 0;
+            int iterBestIndex = -1;
+            bool firstMoveCut = false;
 
             int rootLegalsSearched = 0;
 
@@ -1545,6 +1636,8 @@ struct Searcher {
                     score = -negamax(pos, d - 1, -curBeta, -curAlpha, 1, curFrom, curTo, nextLastTo, nextLastWasCap,
                                      childPV);
                 } else {
+                    if (collect_stats())
+                        ss.rootNonFirstTried++;
                     int rd = (d - 1) - r;
                     if (rd < 0)
                         rd = 0;
@@ -1553,6 +1646,11 @@ struct Searcher {
                                      childPV);
 
                     if (score > curAlpha && score < curBeta) {
+                        if (collect_stats()) {
+                            ss.rootPvsReSearch++;
+                            if (r > 0)
+                                ss.rootLmrReSearch++;
+                        }
                         PVLine childPV2;
                         score = -negamax(pos, d - 1, -curBeta, -curAlpha, 1, curFrom, curTo, nextLastTo, nextLastWasCap,
                                          childPV2);
@@ -1570,6 +1668,7 @@ struct Searcher {
                 if (score > iterBestScore) {
                     iterBestScore = score;
                     iterBestMove = m;
+                    iterBestIndex = i;
 
                     iterPV.m[0] = m;
                     iterPV.len = std::min(127, childPV.len + 1);
@@ -1580,17 +1679,32 @@ struct Searcher {
 
                 if (score > curAlpha)
                     curAlpha = score;
-                if (curAlpha >= curBeta)
+                if (curAlpha >= curBeta) {
+                    if (i == 0)
+                        firstMoveCut = true;
                     break;
+                }
             }
 
             if (rootLegalsSearched == 0)
                 outOk = false;
 
+            if (collect_stats() && rootLegalsSearched > 0) {
+                ss.rootIters++;
+                if (iterBestIndex == 0 || firstMoveCut)
+                    ss.rootFirstBestOrCut++;
+            }
+
             outBestMove = iterBestMove;
             outBestScore = iterBestScore;
             outPV = iterPV;
         };
+
+        Move prevIterBestMove = 0;
+        int prevIterScore = 0;
+        bool prevHadNull = false;
+        bool prevHadRfp = false;
+        bool prevHadRazor = false;
 
         for (int d = 1; d <= maxDepth; d++) {
             if (time_up()) [[unlikely]]
@@ -1630,17 +1744,50 @@ struct Searcher {
             PVLine localPV;
             localPV.len = 0;
             bool ok = false;
+            Move rootTTMove = 0;
+            {
+                TTEntry rte{};
+                if (stt->probe_copy(pos.zobKey, rte) && rte.best && is_legal_move_here(pos, rte.best))
+                    rootTTMove = rte.best;
+            }
+
+            const uint64_t pRazor0 = ps.razorPrune;
+            const uint64_t pRfp0 = ps.rfpPrune;
+            const uint64_t pNull0 = ss.nullTried;
 
             root_search(d, alpha, beta, localBestMove, localBestScore, localPV, ok);
             if (!ok)
                 break;
 
             if (useAsp && (localBestScore <= alpha || localBestScore >= beta)) {
+                if (collect_stats())
+                    ss.aspFail++;
                 alpha = -INF;
                 beta = INF;
                 root_search(d, alpha, beta, localBestMove, localBestScore, localPV, ok);
                 if (!ok)
                     break;
+            }
+
+            if (collect_stats()) {
+                ss.rootBestSrc[classify_root_source(localBestMove, rootTTMove)]++;
+                const bool hadRazor = (ps.razorPrune > pRazor0);
+                const bool hadRfp = (ps.rfpPrune > pRfp0);
+                const bool hadNull = (ss.nullTried > pNull0);
+                if (prevIterBestMove && localBestMove && localBestMove != prevIterBestMove &&
+                    std::abs(localBestScore - prevIterScore) >= 120) {
+                    if (prevHadNull)
+                        ss.proxyReversalAfterNull++;
+                    if (prevHadRfp)
+                        ss.proxyReversalAfterRfp++;
+                    if (prevHadRazor)
+                        ss.proxyReversalAfterRazor++;
+                }
+                prevHadNull = hadNull;
+                prevHadRfp = hadRfp;
+                prevHadRazor = hadRazor;
+                prevIterBestMove = localBestMove;
+                prevIterScore = localBestScore;
             }
 
             bestMove = localBestMove;
@@ -1689,23 +1836,44 @@ struct Searcher {
         res.ponderMove = (rootPVLegal.len >= 2 ? rootPVLegal.m[1] : 0);
 
         if (emitInfo) {
-            std::cout << "info string prune qfut=" << ps.quietFutility << " qlim=" << ps.quietLimit
+            std::cout << "info string prune razor=" << ps.razorPrune << " rfp=" << ps.rfpPrune
+                      << " qfut=" << ps.quietFutility << " qlim=" << ps.quietLimit
                       << " csee=" << ps.capSeePrune << " iir=" << ps.iirApplied << " lmr=" << ps.lmrApplied
                       << " bcut=" << ps.betaCutoff << "\n";
-            if constexpr (kCollectSearchStats) {
-                uint64_t fh1Den = ss.firstMoveTried ? ss.firstMoveTried : 1;
-                uint64_t mlDen = ss.moveLoopNodes ? ss.moveLoopNodes : 1;
+            if (collect_stats()) {
+                uint64_t rootDen = ss.rootIters ? ss.rootIters : 1;
                 uint64_t ttDen = ss.ttProbe ? ss.ttProbe : 1;
+                uint64_t ttMoveDen = ss.ttMoveAvail ? ss.ttMoveAvail : 1;
                 uint64_t lmrDen = ss.lmrTried ? ss.lmrTried : 1;
-                uint64_t nullDen = ss.nullTried ? ss.nullTried : 1;
+                uint64_t rootReDen = ss.rootNonFirstTried ? ss.rootNonFirstTried : 1;
 
-                std::cout << "info string stats fh1=" << (1000ULL * ss.firstMoveFailHigh / fh1Den)
-                          << " avgMoves=" << (1000ULL * ss.totalLegalTried / mlDen) << " ttHit="
-                          << (1000ULL * ss.ttHit / ttDen) << " ttCut=" << (1000ULL * ss.ttCut / ttDen) << " ttBest="
-                          << (1000ULL * ss.ttBest / ttDen) << " lmrRe=" << (1000ULL * ss.lmrResearched / lmrDen)
-                          << " nullCut=" << (1000ULL * ss.nullCut / nullDen) << " nVfyFail="
-                          << (1000ULL * ss.nullVerifyFail / (ss.nullVerifyTried ? ss.nullVerifyTried : 1))
-                          << " lmp=" << ss.lmpSkip << " fut=" << ss.futilitySkip << "\n";
+                auto pct = [](uint64_t num, uint64_t den) { return (1000ULL * num) / (den ? den : 1); };
+                uint64_t avgPv = (ss.nodeByType[0] ? (1000ULL * ss.legalByType[0] / ss.nodeByType[0]) : 0);
+                uint64_t avgCut = (ss.nodeByType[1] ? (1000ULL * ss.legalByType[1] / ss.nodeByType[1]) : 0);
+                uint64_t avgAll = (ss.nodeByType[2] ? (1000ULL * ss.legalByType[2] / ss.nodeByType[2]) : 0);
+
+                std::cout << "info string stats_root fh1=" << pct(ss.rootFirstBestOrCut, rootDen)
+                          << " re=" << pct(ss.rootPvsReSearch, rootReDen)
+                          << " src_tt=" << pct(ss.rootBestSrc[0], rootDen) << " src_cap=" << pct(ss.rootBestSrc[1], rootDen)
+                          << " src_k=" << pct(ss.rootBestSrc[2], rootDen) << " src_c=" << pct(ss.rootBestSrc[3], rootDen)
+                          << " src_q=" << pct(ss.rootBestSrc[4], rootDen) << " asp=" << ss.aspFail << "\n";
+
+                std::cout << "info string stats_node pv=" << ss.nodeByType[0] << " cut=" << ss.nodeByType[1]
+                          << " all=" << ss.nodeByType[2] << " avgm_pv=" << avgPv << " avgm_cut=" << avgCut
+                          << " avgm_all=" << avgAll << " tt_hit=" << pct(ss.ttHit, ttDen)
+                          << " tt_cut=" << pct(ss.ttCut, ttDen) << " ttm_first=" << pct(ss.ttMoveFirst, ttMoveDen)
+                          << "\n";
+
+                std::cout << "info string stats_lmr red=" << ss.lmrTried << " re=" << pct(ss.lmrResearched, lmrDen)
+                          << " rk=" << ss.lmrReducedByBucket[0] << " rc=" << ss.lmrReducedByBucket[1]
+                          << " rh=" << ss.lmrReducedByBucket[2] << " rl=" << ss.lmrReducedByBucket[3]
+                          << " rek=" << ss.lmrResearchedByBucket[0] << " rec=" << ss.lmrResearchedByBucket[1]
+                          << " reh=" << ss.lmrResearchedByBucket[2] << " rel=" << ss.lmrResearchedByBucket[3] << "\n";
+
+                std::cout << "info string stats_prune null_t=" << ss.nullTried << " null_fh=" << ss.nullCut
+                          << " null_vf=" << ss.nullVerifyFail << " raz=" << ps.razorPrune << " rfp=" << ps.rfpPrune
+                          << " rev_null=" << ss.proxyReversalAfterNull << " rev_rfp=" << ss.proxyReversalAfterRfp
+                          << " rev_raz=" << ss.proxyReversalAfterRazor << "\n";
             }
         }
 

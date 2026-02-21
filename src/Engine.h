@@ -41,6 +41,7 @@ class Engine {
     void set_syzygy_path(const std::string& s) { syzygy_path_ = s; }
     void set_skill_level(int lv) { skill_level_ = std::max(0, std::min(20, lv)); }
     int skill_level() const { return skill_level_; }
+    void set_search_stats(bool on) { search::set_collect_stats(on); }
 
     // Position management.
     void set_startpos() { pos.set_startpos(); }

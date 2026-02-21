@@ -93,6 +93,7 @@ static inline void uci_id(const Engine&) {
     std::cout << "option name Move Overhead type spin default 30 min 0 max 5000\n";
     std::cout << "option name SyzygyPath type string default <empty>\n";
     std::cout << "option name Skill Level type spin default 20 min 0 max 20\n";
+    std::cout << "option name SearchStats type check default false\n";
     std::cout << "uciok\n";
     std::cout.flush();
 }
@@ -178,6 +179,12 @@ static inline void cmd_setoption(const std::vector<std::string>& tokens, Engine&
         int lv = to_int_safe(value, 20);
         lv = clampi(lv, 0, 20);
         engine.set_skill_level(lv);
+        return;
+    }
+
+    if (lname == "searchstats") {
+        bool b = to_bool_safe(value, false);
+        engine.set_search_stats(b);
         return;
     }
 }
