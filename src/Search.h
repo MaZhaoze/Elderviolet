@@ -404,6 +404,7 @@ struct Searcher {
     } ps;
 
     struct SearchStats {
+        static constexpr int BUCKET_N = 5;
         uint64_t nodePv = 0;
         uint64_t nodeCut = 0;
         uint64_t nodeAll = 0;
@@ -466,6 +467,12 @@ struct Searcher {
         uint64_t makeCalls = 0;
         uint64_t makeMain = 0;
         uint64_t makeQ = 0;
+        uint64_t bucketTry[3][BUCKET_N]{};
+        uint64_t bucketFh[3][BUCKET_N]{};
+        uint64_t bucketBest[3][BUCKET_N]{};
+        uint64_t bucketSee[3][BUCKET_N]{};
+        uint64_t bucketLeg[3][BUCKET_N]{};
+        uint64_t bucketMk[3][BUCKET_N]{};
         inline void clear() { *this = SearchStats{}; }
     } ss;
 
@@ -694,7 +701,7 @@ struct Searcher {
         v = clampi(v, -cap, cap);
     }
 
-    inline bool is_capture(const Position& pos, Move m) {
+    inline bool is_capture(const Position& pos, Move m) const {
         if (flags_of(m) & MF_EP)
             return true;
         int to = to_sq(m);
@@ -832,6 +839,33 @@ struct Searcher {
         return 3;
     }
 
+    enum MoveBucket : int {
+        MB_TT = 0,
+        MB_CAP_GOOD = 1,
+        MB_QUIET_SPECIAL = 2,
+        MB_QUIET = 3,
+        MB_CAP_BAD = 4
+    };
+
+    inline int classify_bucket(const Position& pos, Move m, Move ttMove, int ply, int prevFrom, int prevTo, int score,
+                               bool scoreKnown) const {
+        if (m == ttMove)
+            return MB_TT;
+        const bool capLike = is_capture(pos, m) || (flags_of(m) & MF_EP) || promo_of(m);
+        if (capLike) {
+            if (!scoreKnown)
+                return MB_CAP_GOOD;
+            return (score >= 50000000) ? MB_CAP_GOOD : MB_CAP_BAD;
+        }
+
+        ply = std::min(ply, 127);
+        if (m == killer[0][ply] || m == killer[1][ply])
+            return MB_QUIET_SPECIAL;
+        if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u && m == countermove[prevFrom][prevTo])
+            return MB_QUIET_SPECIAL;
+        return MB_QUIET;
+    }
+
     inline NodeContext make_node_context(const Position& pos, int depth, int alpha, int beta, int ply, bool inCheck,
                                          int staticEval, bool improving, bool ttHit, const TTEntry& te) const {
         NodeContext ctx{};
@@ -899,11 +933,11 @@ struct Searcher {
         if (flags_of(m) & MF_CASTLE)
             sc += 30000000;
 
-        if (is_capture(pos, m)) {
-            sc += 50000000;
+            if (is_capture(pos, m)) {
+                sc += 50000000;
 
-            Piece victim = pos.board[to];
-            if (flags_of(m) & MF_EP)
+                Piece victim = pos.board[to];
+                if (flags_of(m) & MF_EP)
                 victim = make_piece(flip_color(pos.side), PAWN);
 
             int s = see_quick_main(pos, m);
@@ -911,11 +945,11 @@ struct Searcher {
             if (promo_of(m) || s < -250)
                 s = see_full_main(pos, m);
 
-            s = clampi(s, -500, 500);
-            sc += s * 8000;
-            sc += mvv_lva(victim, mover) * 200;
-            return sc;
-        }
+                s = clampi(s, -500, 500);
+                sc += s * 8000;
+                sc += mvv_lva(victim, mover) * 200;
+                return sc;
+            }
 
         if (m == killer[0][ply])
             sc += 20000000;
@@ -1607,8 +1641,30 @@ struct Searcher {
             }
         }
 
+        auto& order = plyOrder[ply];
+        order.clear();
+        order.reserve(moves.size());
+        // Delay low-value captures (CAP_BAD) until after quiets.
+        for (int i = 0; i < (int)moves.size(); i++) {
+            Move m = moves[i];
+            const bool capLike = is_capture(pos, m) || (flags_of(m) & MF_EP);
+            const bool isPromo = (promo_of(m) != 0);
+            const bool capBad = (capLike && !isPromo && scores[i] < 50000000);
+            if (!capBad)
+                order.push_back(i);
+        }
+        for (int i = 0; i < (int)moves.size(); i++) {
+            Move m = moves[i];
+            const bool capLike = is_capture(pos, m) || (flags_of(m) & MF_EP);
+            const bool isPromo = (promo_of(m) != 0);
+            const bool capBad = (capLike && !isPromo && scores[i] < 50000000);
+            if (capBad)
+                order.push_back(i);
+        }
+
         int bestScore = -INF;
         Move bestMove = 0;
+        int bestBucket = MB_QUIET;
         const int origAlpha = alpha;
 
         PVLine bestPV;
@@ -1626,10 +1682,11 @@ struct Searcher {
             ss.ttMoveAvail++;
         }
 
-        for (int kk = 0; kk < (int)moves.size(); kk++) {
+        for (int oi = 0; oi < (int)order.size(); oi++) {
             if (stop_or_time_up(false)) [[unlikely]]
                 return alpha;
 
+            const int kk = order[oi];
             Move m = moves[kk];
             const int curFrom = from_sq(m);
             const int curTo = to_sq(m);
@@ -1637,6 +1694,8 @@ struct Searcher {
             const bool isCap = is_capture(pos, m) || (flags_of(m) & MF_EP);
             const bool isPromo = (promo_of(m) != 0);
             const bool isQuiet = (!isCap && !isPromo);
+            const int bucket = collect_stats() ? classify_bucket(pos, m, ttMove, ply, prevFrom, prevTo, scores[kk], true)
+                                               : MB_QUIET;
 
             if (g_params.enableQuietFutility && !inCheck && isQuiet && ply > 0 && depth <= g_params.quietFutilityDepthMax &&
                 m != ttMove) {
@@ -1663,9 +1722,13 @@ struct Searcher {
             if (g_params.enableCapSeePrune && !inCheck && isCap && !isPromo && ply > 0 && depth <= g_params.capSeeDepthMax &&
                 m != ttMove) {
                 int sQ = see_quick_main(pos, m);
+                if (collect_stats())
+                    ss.bucketSee[nTypeIdx][bucket]++;
                 if (sQ < g_params.capSeeQuickFullTrigger) {
                     if (!see_fast_non_negative(pos, m, false)) {
                         int sF = see_full_main(pos, m);
+                        if (collect_stats())
+                            ss.bucketSee[nTypeIdx][bucket]++;
                         if (sF < g_params.capSeeFullCut) {
                             ps.capSeePrune++;
                             continue;
@@ -1677,7 +1740,11 @@ struct Searcher {
                 }
             }
 
+            if (collect_stats())
+                ss.bucketLeg[nTypeIdx][bucket]++;
             Undo u = do_move_counted(pos, m);
+            if (collect_stats())
+                ss.bucketMk[nTypeIdx][bucket]++;
 
             if (attacks::in_check(pos, us)) {
                 pos.undo_move(m, u);
@@ -1689,6 +1756,8 @@ struct Searcher {
                 ss.totalLegalTried++;
             if (collect_stats())
                 ss.legalByType[nTypeIdx]++;
+            if (collect_stats())
+                ss.bucketTry[nTypeIdx][bucket]++;
             if (collect_stats() && ttAvail && !ttFirstAccounted && legalMovesSearched == 1) {
                 if (m == ttMove)
                     ss.ttMoveFirst++;
@@ -1768,6 +1837,7 @@ struct Searcher {
             if (score > bestScore) {
                 bestScore = score;
                 bestMove = m;
+                bestBucket = bucket;
 
                 bestPV.m[0] = m;
                 bestPV.len = std::min(127, childPV.len + 1);
@@ -1783,6 +1853,8 @@ struct Searcher {
 
             if (alpha >= beta) {
                 ps.betaCutoff++;
+                if (collect_stats())
+                    ss.bucketFh[nTypeIdx][bucket]++;
                 if (collect_stats()) {
                     if (legalMovesSearched == 1)
                         ss.firstMoveFailHigh++;
@@ -1805,6 +1877,9 @@ struct Searcher {
 
         if (legalMovesSearched == 0)
             return inCheck ? (-MATE + ply) : 0;
+
+        if (collect_stats())
+            ss.bucketBest[nTypeIdx][bestBucket]++;
 
         pv = bestPV;
 
@@ -2204,6 +2279,67 @@ struct Searcher {
                           << " chk=" << pct(ss.legCheck, legDen) << " ep=" << pct(ss.legEp, legDen)
                           << " king=" << pct(ss.legKing, legDen) << " sus=" << pct(ss.legSuspin, legDen)
                           << " fast=" << pct(ss.legFast, legDen) << " fast2=" << pct(ss.legFast2, legDen) << "\n";
+
+                auto sum_bucket = [&](uint64_t a[3][SearchStats::BUCKET_N], int b) {
+                    return a[0][b] + a[1][b] + a[2][b];
+                };
+                const uint64_t t0 = sum_bucket(ss.bucketTry, MB_TT), t1 = sum_bucket(ss.bucketTry, MB_CAP_GOOD),
+                               t2 = sum_bucket(ss.bucketTry, MB_QUIET_SPECIAL), t3 = sum_bucket(ss.bucketTry, MB_QUIET),
+                               t4 = sum_bucket(ss.bucketTry, MB_CAP_BAD);
+                const uint64_t f0 = sum_bucket(ss.bucketFh, MB_TT), f1 = sum_bucket(ss.bucketFh, MB_CAP_GOOD),
+                               f2 = sum_bucket(ss.bucketFh, MB_QUIET_SPECIAL), f3 = sum_bucket(ss.bucketFh, MB_QUIET),
+                               f4 = sum_bucket(ss.bucketFh, MB_CAP_BAD);
+                const uint64_t b0 = sum_bucket(ss.bucketBest, MB_TT), b1 = sum_bucket(ss.bucketBest, MB_CAP_GOOD),
+                               b2 = sum_bucket(ss.bucketBest, MB_QUIET_SPECIAL), b3 = sum_bucket(ss.bucketBest, MB_QUIET),
+                               b4 = sum_bucket(ss.bucketBest, MB_CAP_BAD);
+                const uint64_t s0 = sum_bucket(ss.bucketSee, MB_TT), s1 = sum_bucket(ss.bucketSee, MB_CAP_GOOD),
+                               s2 = sum_bucket(ss.bucketSee, MB_QUIET_SPECIAL), s3 = sum_bucket(ss.bucketSee, MB_QUIET),
+                               s4 = sum_bucket(ss.bucketSee, MB_CAP_BAD);
+                const uint64_t l0 = sum_bucket(ss.bucketLeg, MB_TT), l1 = sum_bucket(ss.bucketLeg, MB_CAP_GOOD),
+                               l2 = sum_bucket(ss.bucketLeg, MB_QUIET_SPECIAL), l3 = sum_bucket(ss.bucketLeg, MB_QUIET),
+                               l4 = sum_bucket(ss.bucketLeg, MB_CAP_BAD);
+                const uint64_t m0 = sum_bucket(ss.bucketMk, MB_TT), m1 = sum_bucket(ss.bucketMk, MB_CAP_GOOD),
+                               m2 = sum_bucket(ss.bucketMk, MB_QUIET_SPECIAL), m3 = sum_bucket(ss.bucketMk, MB_QUIET),
+                               m4 = sum_bucket(ss.bucketMk, MB_CAP_BAD);
+                auto phr = [&](uint64_t fh, uint64_t tr) { return pct(fh, tr ? tr : 1); };
+                std::cout << "info string stats_bucket"
+                          << " tt_t=" << t0 << " tt_fh=" << f0 << " tt_fhr=" << phr(f0, t0) << " tt_best=" << b0
+                          << " tt_see=" << s0 << " tt_leg=" << l0 << " tt_mk=" << m0
+                          << " cg_t=" << t1 << " cg_fh=" << f1 << " cg_fhr=" << phr(f1, t1) << " cg_best=" << b1
+                          << " cg_see=" << s1 << " cg_leg=" << l1 << " cg_mk=" << m1
+                          << " qs_t=" << t2 << " qs_fh=" << f2 << " qs_fhr=" << phr(f2, t2) << " qs_best=" << b2
+                          << " qs_see=" << s2 << " qs_leg=" << l2 << " qs_mk=" << m2
+                          << " q_t=" << t3 << " q_fh=" << f3 << " q_fhr=" << phr(f3, t3) << " q_best=" << b3
+                          << " q_see=" << s3 << " q_leg=" << l3 << " q_mk=" << m3
+                          << " cb_t=" << t4 << " cb_fh=" << f4 << " cb_fhr=" << phr(f4, t4) << " cb_best=" << b4
+                          << " cb_see=" << s4 << " cb_leg=" << l4 << " cb_mk=" << m4 << "\n";
+
+                auto phr_cut = [&](int b) {
+                    const uint64_t tr = ss.bucketTry[1][b];
+                    const uint64_t fh = ss.bucketFh[1][b];
+                    return pct(fh, tr ? tr : 1);
+                };
+                std::cout << "info string stats_bucket_cut"
+                          << " tt_t=" << ss.bucketTry[1][MB_TT] << " tt_fh=" << ss.bucketFh[1][MB_TT]
+                          << " tt_fhr=" << phr_cut(MB_TT) << " tt_best=" << ss.bucketBest[1][MB_TT]
+                          << " tt_see=" << ss.bucketSee[1][MB_TT] << " tt_leg=" << ss.bucketLeg[1][MB_TT]
+                          << " tt_mk=" << ss.bucketMk[1][MB_TT]
+                          << " cg_t=" << ss.bucketTry[1][MB_CAP_GOOD] << " cg_fh=" << ss.bucketFh[1][MB_CAP_GOOD]
+                          << " cg_fhr=" << phr_cut(MB_CAP_GOOD) << " cg_best=" << ss.bucketBest[1][MB_CAP_GOOD]
+                          << " cg_see=" << ss.bucketSee[1][MB_CAP_GOOD] << " cg_leg=" << ss.bucketLeg[1][MB_CAP_GOOD]
+                          << " cg_mk=" << ss.bucketMk[1][MB_CAP_GOOD]
+                          << " qs_t=" << ss.bucketTry[1][MB_QUIET_SPECIAL] << " qs_fh=" << ss.bucketFh[1][MB_QUIET_SPECIAL]
+                          << " qs_fhr=" << phr_cut(MB_QUIET_SPECIAL) << " qs_best=" << ss.bucketBest[1][MB_QUIET_SPECIAL]
+                          << " qs_see=" << ss.bucketSee[1][MB_QUIET_SPECIAL] << " qs_leg=" << ss.bucketLeg[1][MB_QUIET_SPECIAL]
+                          << " qs_mk=" << ss.bucketMk[1][MB_QUIET_SPECIAL]
+                          << " q_t=" << ss.bucketTry[1][MB_QUIET] << " q_fh=" << ss.bucketFh[1][MB_QUIET]
+                          << " q_fhr=" << phr_cut(MB_QUIET) << " q_best=" << ss.bucketBest[1][MB_QUIET]
+                          << " q_see=" << ss.bucketSee[1][MB_QUIET] << " q_leg=" << ss.bucketLeg[1][MB_QUIET]
+                          << " q_mk=" << ss.bucketMk[1][MB_QUIET]
+                          << " cb_t=" << ss.bucketTry[1][MB_CAP_BAD] << " cb_fh=" << ss.bucketFh[1][MB_CAP_BAD]
+                          << " cb_fhr=" << phr_cut(MB_CAP_BAD) << " cb_best=" << ss.bucketBest[1][MB_CAP_BAD]
+                          << " cb_see=" << ss.bucketSee[1][MB_CAP_BAD] << " cb_leg=" << ss.bucketLeg[1][MB_CAP_BAD]
+                          << " cb_mk=" << ss.bucketMk[1][MB_CAP_BAD] << "\n";
             }
         }
 
