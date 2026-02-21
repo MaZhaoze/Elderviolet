@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <vector>
 #include <algorithm>
 #include <chrono>
@@ -111,6 +111,65 @@ inline int selDepth = 0;
 // =====================================
 static constexpr int INF = 30000;
 static constexpr int MATE = 29000;
+
+// Search parameter governance: all pruning/reduction knobs are centralized here.
+struct SearchParams {
+    int nodeOrderK = 12;
+    int rootOrderK = 10;
+
+    bool ttPvConservative = true;
+
+    bool enableRazoring = true;
+    int razorDepthMax = 2;
+    int razorMarginD1 = 220;
+    int razorMarginD2 = 320;
+    int razorImprovingBonus = 20;
+
+    bool enableRfp = true;
+    int rfpDepthMax = 3;
+    int rfpBase = 120;
+    int rfpPerDepth = 90;
+    int rfpImprovingBonus = 40;
+
+    bool enableIIR = true;
+    int iirMinDepth = 6;
+    int iirReduce = 1;
+
+    bool enableNullMove = true;
+    int nullMinDepth = 3;
+    int nullBase = 3;
+    int nullDepthDiv = 6;
+    int nullMateGuard = 256;
+
+    bool enableQuietFutility = true;
+    int quietFutilityDepthMax = 2;
+    int quietFutilityD1 = 190;
+    int quietFutilityD2 = 290;
+    int quietFutilityImprovingBonus = 40;
+
+    bool enableQuietLimit = true;
+    int quietLimitDepthMax = 2;
+    int quietLimitD1 = 5;
+    int quietLimitD2 = 8;
+
+    bool enableCapSeePrune = true;
+    int capSeeDepthMax = 4;
+    int capSeeQuickFullTrigger = -200;
+    int capSeeFullCut = -120;
+    int capSeeQuickCut = -120;
+
+    bool enableLmr = true;
+    int lmrMinDepth = 3;
+    int lmrMove1 = 4;
+    int lmrMove2 = 10;
+    int lmrMove3 = 14;
+    int lmrDepthForMove3 = 7;
+    int lmrHistoryLow = 2000;
+    int lmrHistoryHigh = 60000;
+};
+
+inline SearchParams g_params{};
+inline constexpr bool kCollectSearchStats = false;
 
 // =====================================
 // Color helpers
@@ -323,10 +382,49 @@ struct Searcher {
         uint64_t quietFutility = 0;
         uint64_t quietLimit = 0;
         uint64_t capSeePrune = 0;
+        uint64_t iirApplied = 0;
         uint64_t lmrApplied = 0;
         uint64_t betaCutoff = 0;
         inline void clear() { *this = PruneStats{}; }
     } ps;
+
+    struct SearchStats {
+        uint64_t nodePv = 0;
+        uint64_t nodeCut = 0;
+        uint64_t nodeAll = 0;
+        uint64_t ttProbe = 0;
+        uint64_t ttHit = 0;
+        uint64_t ttCut = 0;
+        uint64_t ttBest = 0;
+        uint64_t firstMoveTried = 0;
+        uint64_t firstMoveFailHigh = 0;
+        uint64_t lmrTried = 0;
+        uint64_t lmrResearched = 0;
+        uint64_t nullTried = 0;
+        uint64_t nullCut = 0;
+        uint64_t nullVerifyTried = 0;
+        uint64_t nullVerifyFail = 0;
+        uint64_t lmpSkip = 0;
+        uint64_t futilitySkip = 0;
+        uint64_t totalLegalTried = 0;
+        uint64_t moveLoopNodes = 0;
+        inline void clear() { *this = SearchStats{}; }
+    } ss;
+
+    struct NodeContext {
+        enum NodeType : uint8_t { PV = 0, CUT = 1, ALL = 2 };
+        NodeType nodeType = PV;
+        int depth = 0;
+        int ply = 0;
+        bool inCheck = false;
+        int staticEval = -INF;
+        bool improving = false;
+        bool ttHit = false;
+        int ttDepth = -1;
+        uint8_t ttBound = TT_ALPHA;
+        uint8_t ttConfidence = 0; // 0..3
+        uint8_t endgameRisk = 0;  // 0..2
+    };
 
     // Batch node counting to reduce atomic contention.
     uint64_t nodes_batch = 0;
@@ -437,6 +535,120 @@ struct Searcher {
             vv += 800;
 
         return vv - av;
+    }
+
+    inline int razor_margin(int depth, bool improving) const {
+        int margin = (depth <= 1) ? g_params.razorMarginD1 : g_params.razorMarginD2;
+        if (improving)
+            margin += g_params.razorImprovingBonus;
+        return margin;
+    }
+
+    inline int rfp_margin(int depth, bool improving) const {
+        int margin = g_params.rfpBase + g_params.rfpPerDepth * depth;
+        if (improving)
+            margin += g_params.rfpImprovingBonus;
+        return margin;
+    }
+
+    inline int quiet_futility_margin(int depth, bool improving) const {
+        int margin = (depth <= 1) ? g_params.quietFutilityD1 : g_params.quietFutilityD2;
+        if (improving)
+            margin += g_params.quietFutilityImprovingBonus;
+        return margin;
+    }
+
+    inline int quiet_limit_for_depth(int depth) const {
+        return (depth <= 1) ? g_params.quietLimitD1 : g_params.quietLimitD2;
+    }
+
+    inline void update_quiet_history(Color us, int prevFrom, int prevTo, int from, int to, int depth, bool good) {
+        int ci = color_index(us);
+        const int sign = good ? 1 : -1;
+        const int hBonus = depth * depth * (good ? 16 : 2);
+        const int cBonus = depth * depth * (good ? 12 : 1);
+
+        update_stat(history[ci][from][to], sign * hBonus);
+        if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u)
+            update_stat(contHist[ci][prevFrom][prevTo][from][to], sign * cBonus);
+    }
+
+    inline int compute_lmr_reduction(int depth, int legalMovesSearched, bool inCheck, bool isQuiet, bool improving,
+                                     bool isPvNode, Color us, int from, int to) {
+        if (!g_params.enableLmr || depth < g_params.lmrMinDepth || inCheck || !isQuiet)
+            return 0;
+
+        int reduction = 1;
+        if (legalMovesSearched > g_params.lmrMove1)
+            reduction++;
+        if (legalMovesSearched > g_params.lmrMove2)
+            reduction++;
+        if (depth >= g_params.lmrDepthForMove3 && legalMovesSearched > g_params.lmrMove3)
+            reduction++;
+        if (!improving)
+            reduction++;
+        if (isPvNode)
+            reduction = std::max(0, reduction - 1);
+
+        int ci = color_index(us);
+        int h = history[ci][from][to] / 2;
+        if (h < g_params.lmrHistoryLow)
+            reduction++;
+        if (h > g_params.lmrHistoryHigh)
+            reduction = std::max(0, reduction - 1);
+
+        reduction = std::min(reduction, depth - 2);
+        return std::max(0, reduction);
+    }
+
+    inline NodeContext make_node_context(const Position& pos, int depth, int alpha, int beta, int ply, bool inCheck,
+                                         int staticEval, bool improving, bool ttHit, const TTEntry& te) const {
+        NodeContext ctx{};
+        ctx.depth = depth;
+        ctx.ply = ply;
+        ctx.inCheck = inCheck;
+        ctx.staticEval = staticEval;
+        ctx.improving = improving;
+        ctx.ttHit = ttHit;
+        if (beta - alpha > 1)
+            ctx.nodeType = NodeContext::PV;
+        else
+            ctx.nodeType = (staticEval >= beta ? NodeContext::CUT : NodeContext::ALL);
+
+        if (ttHit) {
+            ctx.ttDepth = te.depth;
+            ctx.ttBound = te.flag;
+            int conf = 0;
+            if (te.depth >= depth)
+                conf++;
+            if (te.flag == TT_EXACT)
+                conf += 2;
+            else if (te.flag == TT_BETA || te.flag == TT_ALPHA)
+                conf += 1;
+            ctx.ttConfidence = (uint8_t)clampi(conf, 0, 3);
+        }
+
+        int nonPawn = 0;
+        int major = 0;
+        for (int sq = 0; sq < 64; sq++) {
+            Piece p = pos.board[sq];
+            if (p == NO_PIECE)
+                continue;
+            PieceType pt = type_of(p);
+            if (pt == KING || pt == PAWN)
+                continue;
+            nonPawn++;
+            if (pt == ROOK || pt == QUEEN)
+                major++;
+        }
+        if (major == 0 && nonPawn <= 4)
+            ctx.endgameRisk = 2;
+        else if (nonPawn <= 6)
+            ctx.endgameRisk = 1;
+        else
+            ctx.endgameRisk = 0;
+
+        return ctx;
     }
 
     // Move ordering: TT move, captures (SEE), killers, history, and heuristics.
@@ -841,6 +1053,7 @@ struct Searcher {
     int negamax(Position& pos, int depth, int alpha, int beta, int ply, int prevFrom, int prevTo, int lastTo,
                 bool lastWasCap, PVLine& pv) {
         pv.len = 0;
+        const bool pvNode = (beta - alpha > 1);
 
         if (time_up()) [[unlikely]]
             return alpha;
@@ -876,7 +1089,13 @@ struct Searcher {
         } _kp(keyPly);
 
         TTEntry te{};
+        if constexpr (kCollectSearchStats)
+            ss.ttProbe++;
         bool ttHit = stt->probe_copy(key, te);
+        if constexpr (kCollectSearchStats) {
+            if (ttHit)
+                ss.ttHit++;
+        }
 
         Move ttMove = 0;
         if (ttHit) {
@@ -884,8 +1103,11 @@ struct Searcher {
 
             if (te.depth >= depth) {
                 int ttScore = from_tt_score((int)te.score, ply);
+                const bool allowTTCut = (!pvNode || !g_params.ttPvConservative || te.flag == TT_EXACT);
 
-                if (te.flag == TT_EXACT) {
+                if (te.flag == TT_EXACT && allowTTCut) {
+                    if constexpr (kCollectSearchStats)
+                        ss.ttCut++;
                     if (ttMove && is_legal_move_here(pos, ttMove)) {
                         pv.m[0] = ttMove;
                         pv.len = 1;
@@ -893,7 +1115,9 @@ struct Searcher {
                     return ttScore;
                 }
 
-                if (te.flag == TT_ALPHA && ttScore <= alpha) {
+                if (te.flag == TT_ALPHA && allowTTCut && ttScore <= alpha) {
+                    if constexpr (kCollectSearchStats)
+                        ss.ttCut++;
                     if (pv.len == 0 && ttMove && is_legal_move_here(pos, ttMove)) {
                         pv.m[0] = ttMove;
                         pv.len = 1;
@@ -901,7 +1125,9 @@ struct Searcher {
                     return alpha;
                 }
 
-                if (te.flag == TT_BETA && ttScore >= beta) {
+                if (te.flag == TT_BETA && allowTTCut && ttScore >= beta) {
+                    if constexpr (kCollectSearchStats)
+                        ss.ttCut++;
                     if (pv.len == 0 && ttMove && is_legal_move_here(pos, ttMove)) {
                         pv.m[0] = ttMove;
                         pv.len = 1;
@@ -929,25 +1155,42 @@ struct Searcher {
         if (!inCheck && ply >= 2 && staticEvalStack[ply - 2] > -INF / 2)
             improving = staticEval > staticEvalStack[ply - 2];
 
-        if (!inCheck && ply > 0 && depth <= 2) {
-            const int razorMargin = (depth == 1 ? 220 : 320) + (improving ? 20 : 0);
+        if (g_params.enableRazoring && !inCheck && ply > 0 && depth <= g_params.razorDepthMax) {
+            const int razorMargin = razor_margin(depth, improving);
             if (staticEval + razorMargin <= alpha) {
                 return qsearch(pos, alpha, beta, ply, lastTo, lastWasCap);
             }
         }
 
-        if (!inCheck && depth <= 3 && ply > 0) {
-            const int rfpMargin = 120 + 90 * depth + (improving ? 40 : 0);
+        if (g_params.enableRfp && !inCheck && depth <= g_params.rfpDepthMax && ply > 0) {
+            const int rfpMargin = rfp_margin(depth, improving);
             if (staticEval - rfpMargin >= beta)
                 return beta;
         }
 
-        if (!inCheck && depth >= 3 && ply > 0) {
+        if (g_params.enableIIR && !inCheck && ply > 0 && !pvNode && !ttHit && depth >= g_params.iirMinDepth) {
+            depth = std::max(1, depth - g_params.iirReduce);
+            ps.iirApplied++;
+        }
+
+        if constexpr (kCollectSearchStats) {
+            NodeContext ctx = make_node_context(pos, depth, alpha, beta, ply, inCheck, staticEval, improving, ttHit, te);
+            if (ctx.nodeType == NodeContext::PV)
+                ss.nodePv++;
+            else if (ctx.nodeType == NodeContext::CUT)
+                ss.nodeCut++;
+            else
+                ss.nodeAll++;
+        }
+
+        if (g_params.enableNullMove && !inCheck && depth >= g_params.nullMinDepth && ply > 0) {
             if (has_non_pawn_material(pos, us)) {
-                int R = 3 + depth / 6;
+                int R = g_params.nullBase + depth / g_params.nullDepthDiv;
                 R = std::min(R, depth - 1);
 
-                if (beta < MATE - 256 && alpha > -MATE + 256) {
+                if (beta < MATE - g_params.nullMateGuard && alpha > -MATE + g_params.nullMateGuard) {
+                    if constexpr (kCollectSearchStats)
+                        ss.nullTried++;
                     NullMoveUndo nu;
                     do_null_move(pos, nu);
 
@@ -958,8 +1201,11 @@ struct Searcher {
 
                     if (time_up()) [[unlikely]]
                         return alpha;
-                    if (score >= beta)
+                    if (score >= beta) {
+                        if constexpr (kCollectSearchStats)
+                            ss.nullCut++;
                         return beta;
+                    }
                 }
             }
         }
@@ -984,8 +1230,7 @@ struct Searcher {
         for (int i = 0; i < (int)moves.size(); i++)
             order[i] = i;
 
-        constexpr int NODE_ORDER_K = 12;
-        int K = std::min<int>(NODE_ORDER_K, (int)order.size());
+        int K = std::min<int>(g_params.nodeOrderK, (int)order.size());
 
         for (int i = 0; i < K; i++) {
             int bi = i;
@@ -1010,6 +1255,8 @@ struct Searcher {
 
         int legalMovesSearched = 0;
         int quietMovesSearched = 0;
+        if constexpr (kCollectSearchStats)
+            ss.moveLoopNodes++;
 
         for (int kk = 0; kk < (int)order.size(); kk++) {
             if (time_up()) [[unlikely]]
@@ -1023,31 +1270,38 @@ struct Searcher {
             const bool isPromo = (promo_of(m) != 0);
             const bool isQuiet = (!isCap && !isPromo);
 
-            if (!inCheck && isQuiet && ply > 0 && depth <= 2 && m != ttMove) {
-                const int futMargin = ((depth == 1) ? 190 : 290) + (improving ? 40 : 0);
+            if (g_params.enableQuietFutility && !inCheck && isQuiet && ply > 0 && depth <= g_params.quietFutilityDepthMax &&
+                m != ttMove) {
+                const int futMargin = quiet_futility_margin(depth, improving);
                 if (staticEval + futMargin <= alpha) {
                     ps.quietFutility++;
+                    if constexpr (kCollectSearchStats)
+                        ss.futilitySkip++;
                     continue;
                 }
             }
 
-            if (!inCheck && isQuiet && ply > 0 && depth <= 2 && m != ttMove) {
-                const int limit = (depth == 1) ? 5 : 8;
+            if (g_params.enableQuietLimit && !inCheck && isQuiet && ply > 0 && depth <= g_params.quietLimitDepthMax &&
+                m != ttMove) {
+                const int limit = quiet_limit_for_depth(depth);
                 if (quietMovesSearched >= limit) {
                     ps.quietLimit++;
+                    if constexpr (kCollectSearchStats)
+                        ss.lmpSkip++;
                     continue;
                 }
             }
 
-            if (!inCheck && isCap && !isPromo && ply > 0 && depth <= 4 && m != ttMove) {
+            if (g_params.enableCapSeePrune && !inCheck && isCap && !isPromo && ply > 0 && depth <= g_params.capSeeDepthMax &&
+                m != ttMove) {
                 int sQ = see_quick(pos, m);
-                if (sQ < -200) {
+                if (sQ < g_params.capSeeQuickFullTrigger) {
                     int sF = see_full(pos, m);
-                    if (sF < -120) {
+                    if (sF < g_params.capSeeFullCut) {
                         ps.capSeePrune++;
                         continue;
                     }
-                } else if (sQ < -120) {
+                } else if (sQ < g_params.capSeeQuickCut) {
                     ps.capSeePrune++;
                     continue;
                 }
@@ -1061,6 +1315,8 @@ struct Searcher {
             }
 
             legalMovesSearched++;
+            if constexpr (kCollectSearchStats)
+                ss.totalLegalTried++;
             if (isQuiet)
                 quietMovesSearched++;
 
@@ -1071,33 +1327,20 @@ struct Searcher {
             PVLine childPV;
 
             if (legalMovesSearched == 1) {
+                if constexpr (kCollectSearchStats)
+                    ss.firstMoveTried++;
                 score = -negamax(pos, depth - 1, -beta, -alpha, ply + 1, curFrom, curTo, nextLastTo, nextLastWasCap,
                                  childPV);
             } else {
                 int reduction = 0;
-                if (depth >= 3 && !inCheck && isQuiet && ply > 0) {
-                    const bool isPvNode = (beta - alpha > 1);
-                    reduction = 1;
-                    if (legalMovesSearched > 4)
-                        reduction++;
-                    if (legalMovesSearched > 10)
-                        reduction++;
-                    if (depth >= 7 && legalMovesSearched > 14)
-                        reduction++;
-                    if (!improving)
-                        reduction++;
-                    if (isPvNode)
-                        reduction = std::max(0, reduction - 1);
-
-                    int ci = color_index(us);
-                    int h = history[ci][curFrom][curTo] / 2;
-                    if (h < 2000)
-                        reduction++;
-                    if (h > 60000)
-                        reduction = std::max(0, reduction - 1);
-                    reduction = std::min(reduction, depth - 2);
-                    if (reduction > 0)
+                if (ply > 0) {
+                    reduction = compute_lmr_reduction(depth, legalMovesSearched, inCheck, isQuiet, improving, pvNode, us,
+                                                      curFrom, curTo);
+                    if (reduction > 0) {
                         ps.lmrApplied++;
+                        if constexpr (kCollectSearchStats)
+                            ss.lmrTried++;
+                    }
                 }
 
                 int rd = depth - 1 - reduction;
@@ -1108,6 +1351,8 @@ struct Searcher {
                     -negamax(pos, rd, -alpha - 1, -alpha, ply + 1, curFrom, curTo, nextLastTo, nextLastWasCap, childPV);
 
                 if (score > alpha && reduction > 0 && rd != depth - 1) {
+                    if constexpr (kCollectSearchStats)
+                        ss.lmrResearched++;
                     PVLine childPV2;
                     score = -negamax(pos, depth - 1, -alpha - 1, -alpha, ply + 1, curFrom, curTo, nextLastTo,
                                      nextLastWasCap, childPV2);
@@ -1140,30 +1385,25 @@ struct Searcher {
 
             if (score > alpha)
                 alpha = score;
-            else if (isQuiet && ply < 128) {
-                int ci = color_index(us);
-                update_stat(history[ci][curFrom][curTo], -(depth * depth * 2));
-                if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u) {
-                    update_stat(contHist[ci][prevFrom][prevTo][curFrom][curTo], -(depth * depth));
-                }
-            }
+            else if (isQuiet && ply < 128)
+                update_quiet_history(us, prevFrom, prevTo, curFrom, curTo, depth, false);
 
             if (alpha >= beta) {
                 ps.betaCutoff++;
+                if constexpr (kCollectSearchStats) {
+                    if (legalMovesSearched == 1)
+                        ss.firstMoveFailHigh++;
+                }
                 if (isQuiet && ply < 128) {
                     if (killer[0][ply] != m) {
                         killer[1][ply] = killer[0][ply];
                         killer[0][ply] = m;
                     }
 
-                    int ci = color_index(us);
-                    const int bonus = depth * depth * 16;
-
-                    update_stat(history[ci][curFrom][curTo], bonus);
+                    update_quiet_history(us, prevFrom, prevTo, curFrom, curTo, depth, true);
 
                     if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u) {
                         countermove[prevFrom][prevTo] = m;
-                        update_stat(contHist[ci][prevFrom][prevTo][curFrom][curTo], depth * depth * 12);
                     }
                 }
                 break;
@@ -1187,6 +1427,10 @@ struct Searcher {
 
             stt->store(key, bestMove, (int16_t)store, (int16_t)depth, (uint8_t)flag);
         }
+        if constexpr (kCollectSearchStats) {
+            if (ttHit && bestMove == ttMove && bestMove)
+                ss.ttBest++;
+        }
 
         return bestScore;
     }
@@ -1203,6 +1447,7 @@ struct Searcher {
         nodes_batch = 0;
         selDepth = 0;
         ps.clear();
+        ss.clear();
 
         const int maxDepth = (lim.depth > 0 ? lim.depth : 64);
         const int64_t startT = now_ms();
@@ -1227,8 +1472,6 @@ struct Searcher {
 
         constexpr int ASP_START = 35;
         constexpr int PV_MAX = 128;
-        constexpr int ROOT_ORDER_K = 10;
-
         // Combine global nodes and local batch for consistent info output.
         auto now_time_nodes_nps = [&]() {
             int t = (int)(now_ms() - startT);
@@ -1363,7 +1606,7 @@ struct Searcher {
             for (int i = 0; i < (int)rootMoves.size(); i++)
                 order[i] = move_score(pos, rootMoves[i], bestMove, 0, -1, -1);
 
-            const int K = std::min<int>(ROOT_ORDER_K, (int)rootMoves.size());
+            const int K = std::min<int>(g_params.rootOrderK, (int)rootMoves.size());
             for (int i = 0; i < K; i++) {
                 int bi = i, bs = order[i];
                 for (int j = i + 1; j < (int)rootMoves.size(); j++) {
@@ -1447,8 +1690,23 @@ struct Searcher {
 
         if (emitInfo) {
             std::cout << "info string prune qfut=" << ps.quietFutility << " qlim=" << ps.quietLimit
-                      << " csee=" << ps.capSeePrune << " lmr=" << ps.lmrApplied << " bcut=" << ps.betaCutoff
-                      << "\n";
+                      << " csee=" << ps.capSeePrune << " iir=" << ps.iirApplied << " lmr=" << ps.lmrApplied
+                      << " bcut=" << ps.betaCutoff << "\n";
+            if constexpr (kCollectSearchStats) {
+                uint64_t fh1Den = ss.firstMoveTried ? ss.firstMoveTried : 1;
+                uint64_t mlDen = ss.moveLoopNodes ? ss.moveLoopNodes : 1;
+                uint64_t ttDen = ss.ttProbe ? ss.ttProbe : 1;
+                uint64_t lmrDen = ss.lmrTried ? ss.lmrTried : 1;
+                uint64_t nullDen = ss.nullTried ? ss.nullTried : 1;
+
+                std::cout << "info string stats fh1=" << (1000ULL * ss.firstMoveFailHigh / fh1Den)
+                          << " avgMoves=" << (1000ULL * ss.totalLegalTried / mlDen) << " ttHit="
+                          << (1000ULL * ss.ttHit / ttDen) << " ttCut=" << (1000ULL * ss.ttCut / ttDen) << " ttBest="
+                          << (1000ULL * ss.ttBest / ttDen) << " lmrRe=" << (1000ULL * ss.lmrResearched / lmrDen)
+                          << " nullCut=" << (1000ULL * ss.nullCut / nullDen) << " nVfyFail="
+                          << (1000ULL * ss.nullVerifyFail / (ss.nullVerifyTried ? ss.nullVerifyTried : 1))
+                          << " lmp=" << ss.lmpSkip << " fut=" << ss.futilitySkip << "\n";
+            }
         }
 
         return res;
@@ -1549,3 +1807,13 @@ inline void clear_tt() {
 }
 
 } // namespace search
+
+
+
+
+
+
+
+
+
+
