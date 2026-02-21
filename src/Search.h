@@ -319,6 +319,15 @@ struct Searcher {
 
     uint64_t nodes = 0;
 
+    struct PruneStats {
+        uint64_t quietFutility = 0;
+        uint64_t quietLimit = 0;
+        uint64_t capSeePrune = 0;
+        uint64_t lmrApplied = 0;
+        uint64_t betaCutoff = 0;
+        inline void clear() { *this = PruneStats{}; }
+    } ps;
+
     // Batch node counting to reduce atomic contention.
     uint64_t nodes_batch = 0;
     static constexpr uint64_t NODE_BATCH = 4096; // power of two
@@ -363,6 +372,7 @@ struct Searcher {
             plyOrder[i].reserve(256);
             plyQList[i].reserve(256);
         }
+
     }
 
     inline void bind(SharedTT* shared) { stt = shared; }
@@ -371,6 +381,7 @@ struct Searcher {
 
     uint64_t keyStack[256]{};
     int keyPly = 0;
+    int staticEvalStack[256]{};
 
     static constexpr int MAX_PLY = 128;
 
@@ -386,6 +397,13 @@ struct Searcher {
         bool check;
     };
     std::vector<QNode> plyQList[MAX_PLY];
+
+    // Gravity-style history update: big bonuses have diminishing effect when value is saturated.
+    inline void update_stat(int& v, int bonus, int cap = 300000) {
+        bonus = clampi(bonus, -cap, cap);
+        v += bonus - int((1LL * std::abs(bonus) * v) / cap);
+        v = clampi(v, -cap, cap);
+    }
 
     inline bool is_capture(const Position& pos, Move m) {
         if (flags_of(m) & MF_EP)
@@ -452,7 +470,6 @@ struct Searcher {
 
             s = clampi(s, -500, 500);
             sc += s * 8000;
-
             sc += mvv_lva(victim, mover) * 200;
             return sc;
         }
@@ -466,10 +483,11 @@ struct Searcher {
 
         sc += history[ci][from][to] / 2;
 
-            if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u) {
-                if (m == countermove[prevFrom][prevTo])
-                    sc += 18000000;
-            }
+        if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u) {
+            if (m == countermove[prevFrom][prevTo])
+                sc += 18000000;
+            sc += contHist[ci][prevFrom][prevTo][from][to] / 4;
+        }
 
         if (type_of(mover) == BISHOP)
             sc += 2000;
@@ -792,6 +810,31 @@ struct Searcher {
             pos.undo_move(um[i], undos[i]);
     }
 
+    // Rebuild PV from root position and keep only legal prefix.
+    inline PVLine sanitize_pv_from_root(const Position& root, const PVLine& raw, int maxLen = 128) {
+        PVLine clean;
+        clean.len = 0;
+        if (raw.len <= 0 || maxLen <= 0)
+            return clean;
+
+        Position cur = root;
+        const int lim = std::min({raw.len, maxLen, 128});
+
+        for (int i = 0; i < lim; i++) {
+            Move m = raw.m[i];
+            if (!m)
+                break;
+            if (!is_legal_move_here(cur, m))
+                break;
+
+            clean.m[clean.len++] = m;
+            Undo u = cur.do_move(m);
+            (void)u;
+        }
+
+        return clean;
+    }
+
     // =====================================
     // negamax
     // =====================================
@@ -875,16 +918,26 @@ struct Searcher {
             return qsearch(pos, alpha, beta, ply, lastTo, lastWasCap);
 
         int staticEval = inCheck ? -INF : eval::evaluate(pos);
+        if (!inCheck)
+            staticEvalStack[ply] = staticEval;
+        else if (ply > 0)
+            staticEvalStack[ply] = staticEvalStack[ply - 1];
+        else
+            staticEvalStack[ply] = staticEval;
+
+        bool improving = false;
+        if (!inCheck && ply >= 2 && staticEvalStack[ply - 2] > -INF / 2)
+            improving = staticEval > staticEvalStack[ply - 2];
 
         if (!inCheck && ply > 0 && depth <= 2) {
-            const int razorMargin = (depth == 1 ? 220 : 320);
+            const int razorMargin = (depth == 1 ? 220 : 320) + (improving ? 20 : 0);
             if (staticEval + razorMargin <= alpha) {
                 return qsearch(pos, alpha, beta, ply, lastTo, lastWasCap);
             }
         }
 
         if (!inCheck && depth <= 3 && ply > 0) {
-            const int rfpMargin = 120 + 90 * depth;
+            const int rfpMargin = 120 + 90 * depth + (improving ? 40 : 0);
             if (staticEval - rfpMargin >= beta)
                 return beta;
         }
@@ -971,24 +1024,31 @@ struct Searcher {
             const bool isQuiet = (!isCap && !isPromo);
 
             if (!inCheck && isQuiet && ply > 0 && depth <= 2 && m != ttMove) {
-                const int futMargin = (depth == 1) ? 190 : 290;
-                if (staticEval + futMargin <= alpha)
+                const int futMargin = ((depth == 1) ? 190 : 290) + (improving ? 40 : 0);
+                if (staticEval + futMargin <= alpha) {
+                    ps.quietFutility++;
                     continue;
+                }
             }
 
             if (!inCheck && isQuiet && ply > 0 && depth <= 2 && m != ttMove) {
                 const int limit = (depth == 1) ? 5 : 8;
-                if (quietMovesSearched >= limit)
+                if (quietMovesSearched >= limit) {
+                    ps.quietLimit++;
                     continue;
+                }
             }
 
             if (!inCheck && isCap && !isPromo && ply > 0 && depth <= 4 && m != ttMove) {
                 int sQ = see_quick(pos, m);
                 if (sQ < -200) {
                     int sF = see_full(pos, m);
-                    if (sF < -120)
+                    if (sF < -120) {
+                        ps.capSeePrune++;
                         continue;
+                    }
                 } else if (sQ < -120) {
+                    ps.capSeePrune++;
                     continue;
                 }
             }
@@ -1016,6 +1076,7 @@ struct Searcher {
             } else {
                 int reduction = 0;
                 if (depth >= 3 && !inCheck && isQuiet && ply > 0) {
+                    const bool isPvNode = (beta - alpha > 1);
                     reduction = 1;
                     if (legalMovesSearched > 4)
                         reduction++;
@@ -1023,7 +1084,10 @@ struct Searcher {
                         reduction++;
                     if (depth >= 7 && legalMovesSearched > 14)
                         reduction++;
-                    reduction = std::min(reduction, depth - 2);
+                    if (!improving)
+                        reduction++;
+                    if (isPvNode)
+                        reduction = std::max(0, reduction - 1);
 
                     int ci = color_index(us);
                     int h = history[ci][curFrom][curTo] / 2;
@@ -1032,6 +1096,8 @@ struct Searcher {
                     if (h > 60000)
                         reduction = std::max(0, reduction - 1);
                     reduction = std::min(reduction, depth - 2);
+                    if (reduction > 0)
+                        ps.lmrApplied++;
                 }
 
                 int rd = depth - 1 - reduction;
@@ -1074,8 +1140,16 @@ struct Searcher {
 
             if (score > alpha)
                 alpha = score;
+            else if (isQuiet && ply < 128) {
+                int ci = color_index(us);
+                update_stat(history[ci][curFrom][curTo], -(depth * depth * 2));
+                if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u) {
+                    update_stat(contHist[ci][prevFrom][prevTo][curFrom][curTo], -(depth * depth));
+                }
+            }
 
             if (alpha >= beta) {
+                ps.betaCutoff++;
                 if (isQuiet && ply < 128) {
                     if (killer[0][ply] != m) {
                         killer[1][ply] = killer[0][ply];
@@ -1083,13 +1157,13 @@ struct Searcher {
                     }
 
                     int ci = color_index(us);
+                    const int bonus = depth * depth * 16;
 
-                    history[ci][curFrom][curTo] += depth * depth * 16;
-                    if (history[ci][curFrom][curTo] > 300000)
-                        history[ci][curFrom][curTo] = 300000;
+                    update_stat(history[ci][curFrom][curTo], bonus);
 
                     if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u) {
                         countermove[prevFrom][prevTo] = m;
+                        update_stat(contHist[ci][prevFrom][prevTo][curFrom][curTo], depth * depth * 12);
                     }
                 }
                 break;
@@ -1121,15 +1195,19 @@ struct Searcher {
     Result think(Position& pos, const Limits& lim, bool emitInfo) {
         keyPly = 0;
         keyStack[keyPly++] = pos.zobKey;
+        for (int i = 0; i < 256; i++)
+            staticEvalStack[i] = -INF;
 
         Result res{};
         nodes = 0;
         nodes_batch = 0;
         selDepth = 0;
+        ps.clear();
 
         const int maxDepth = (lim.depth > 0 ? lim.depth : 64);
         const int64_t startT = now_ms();
         int lastFlushMs = 0;
+        int lastInfoMs = -1000000;
 
         std::vector<Move> rootMoves;
         rootMoves.reserve(256);
@@ -1165,6 +1243,7 @@ struct Searcher {
         };
 
         PVLine rootPV;
+        PVLine rootPVLegal;
 
         // Root search with PVS and late-move reductions (root-specific heuristics).
         auto root_search = [&](int d, int alpha, int beta, Move& outBestMove, int& outBestScore, PVLine& outPV,
@@ -1327,27 +1406,32 @@ struct Searcher {
 
             if (emitInfo) {
                 auto [t, nps, nodesAll] = now_time_nodes_nps();
-                int hashfull = stt->hashfull_permille();
-                int sd = std::max(1, selDepth);
+                const bool shouldEmit = (d <= 6) || (t - lastInfoMs >= 90);
+                if (shouldEmit) {
+                    rootPVLegal = sanitize_pv_from_root(pos, rootPV, PV_MAX);
+                    int hashfull = stt->hashfull_permille();
+                    int sd = std::max(1, selDepth);
 
-                std::cout << "info depth " << d << " seldepth " << sd << " multipv 1 ";
-                print_score_uci(bestScore);
-                std::cout << " nodes " << nodesAll << " nps " << nps << " hashfull " << hashfull << " tbhits 0"
-                          << " time " << t << " pv ";
+                    std::cout << "info depth " << d << " seldepth " << sd << " multipv 1 ";
+                    print_score_uci(bestScore);
+                    std::cout << " nodes " << nodesAll << " nps " << nps << " hashfull " << hashfull << " tbhits 0"
+                              << " time " << t << " pv ";
 
-                int outN = std::min(PV_MAX, rootPV.len);
-                for (int i = 0; i < outN; i++) {
-                    Move pm = rootPV.m[i];
-                    if (!pm)
-                        break;
-                    std::cout << move_to_uci(pm) << " ";
-                }
-                std::cout << "\n";
+                    int outN = std::min(PV_MAX, rootPVLegal.len);
+                    for (int i = 0; i < outN; i++) {
+                        Move pm = rootPVLegal.m[i];
+                        if (!pm)
+                            break;
+                        std::cout << move_to_uci(pm) << " ";
+                    }
+                    std::cout << "\n";
 
-                int curMs = t;
-                if (curMs - lastFlushMs >= 50) {
-                    std::cout.flush();
-                    lastFlushMs = curMs;
+                    int curMs = t;
+                    if (curMs - lastFlushMs >= 50) {
+                        std::cout.flush();
+                        lastFlushMs = curMs;
+                    }
+                    lastInfoMs = t;
                 }
             }
         }
@@ -1358,7 +1442,14 @@ struct Searcher {
         res.score = bestScore;
         res.nodes = nodes;
 
-        res.ponderMove = (rootPV.len >= 2 ? rootPV.m[1] : 0);
+        rootPVLegal = sanitize_pv_from_root(pos, rootPV, PV_MAX);
+        res.ponderMove = (rootPVLegal.len >= 2 ? rootPVLegal.m[1] : 0);
+
+        if (emitInfo) {
+            std::cout << "info string prune qfut=" << ps.quietFutility << " qlim=" << ps.quietLimit
+                      << " csee=" << ps.capSeePrune << " lmr=" << ps.lmrApplied << " bcut=" << ps.betaCutoff
+                      << "\n";
+        }
 
         return res;
     }
