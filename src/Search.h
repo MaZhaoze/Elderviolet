@@ -440,6 +440,11 @@ struct Searcher {
         uint64_t proxyReversalAfterRfp = 0;
         uint64_t proxyReversalAfterRazor = 0;
         uint64_t timeChecks = 0;
+        uint64_t legCalls = 0;
+        uint64_t legFail = 0;
+        uint64_t seeCallsMain = 0;
+        uint64_t seeCallsQ = 0;
+        uint64_t makeCalls = 0;
         inline void clear() { *this = SearchStats{}; }
     } ss;
 
@@ -513,6 +518,33 @@ struct Searcher {
             nodes_batch = 0;
             batch_time_check_soft();
         }
+    }
+
+    inline Undo do_move_counted(Position& pos, Move m) {
+        if (collect_stats())
+            ss.makeCalls++;
+        return pos.do_move(m);
+    }
+
+    inline int see_quick_main(const Position& pos, Move m) {
+        if (collect_stats())
+            ss.seeCallsMain++;
+        return see_quick(pos, m);
+    }
+    inline int see_full_main(const Position& pos, Move m) {
+        if (collect_stats())
+            ss.seeCallsMain++;
+        return see_full(pos, m);
+    }
+    inline int see_quick_q(const Position& pos, Move m) {
+        if (collect_stats())
+            ss.seeCallsQ++;
+        return see_quick(pos, m);
+    }
+    inline int see_full_q(const Position& pos, Move m) {
+        if (collect_stats())
+            ss.seeCallsQ++;
+        return see_full(pos, m);
     }
 
     struct PVLine {
@@ -772,10 +804,10 @@ struct Searcher {
             if (flags_of(m) & MF_EP)
                 victim = make_piece(flip_color(pos.side), PAWN);
 
-            int s = see_quick(pos, m);
+            int s = see_quick_main(pos, m);
 
             if (promo_of(m) || s < -250)
-                s = see_full(pos, m);
+                s = see_full_main(pos, m);
 
             s = clampi(s, -500, 500);
             sc += s * 8000;
@@ -899,7 +931,7 @@ struct Searcher {
                     continue;
 
                 if (!promo) {
-                    int sQ = see_quick(pos, m);
+                    int sQ = see_quick_q(pos, m);
 
                     if (sQ <= SEE_FULL_TRIGGER) {
                         bool bigVictim = false;
@@ -909,7 +941,7 @@ struct Searcher {
                             bigVictim = true;
 
                         if (bigVictim) {
-                            int sF = see_full(pos, m);
+                            int sF = see_full_q(pos, m);
                             if (sF < SEE_CUT)
                                 continue;
                         } else {
@@ -952,7 +984,7 @@ struct Searcher {
         for (QNode& qn : list) {
             Move m = qn.m;
 
-            Undo u = pos.do_move(m);
+            Undo u = do_move_counted(pos, m);
 
             if (attacks::in_check(pos, us)) {
                 pos.undo_move(m, u);
@@ -1037,19 +1069,30 @@ struct Searcher {
         return false;
     }
 
-    static inline bool is_legal_move_here(Position& pos, Move m) {
-        if (!move_sane_basic(pos, m))
+    inline bool is_legal_move_here(Position& pos, Move m) {
+        if (collect_stats())
+            ss.legCalls++;
+
+        if (!move_sane_basic(pos, m)) {
+            if (collect_stats())
+                ss.legFail++;
             return false;
+        }
 
         if (flags_of(m) & MF_CASTLE) {
-            if (!movegen::legal_castle_path_ok(pos, m))
+            if (!movegen::legal_castle_path_ok(pos, m)) {
+                if (collect_stats())
+                    ss.legFail++;
                 return false;
+            }
         }
 
         const Color us = pos.side;
-        Undo u = pos.do_move(m);
+        Undo u = do_move_counted(pos, m);
         const bool ok = !attacks::in_check(pos, us);
         pos.undo_move(m, u);
+        if (!ok && collect_stats())
+            ss.legFail++;
         return ok;
     }
 
@@ -1100,7 +1143,7 @@ struct Searcher {
             }
 
             um[ucnt] = m;
-            undos[ucnt] = pos.do_move(m);
+            undos[ucnt] = do_move_counted(pos, m);
             ucnt++;
 
             if (attacks::in_check(pos, flip_color(pos.side))) {
@@ -1137,7 +1180,7 @@ struct Searcher {
                 break;
 
             clean.m[clean.len++] = m;
-            Undo u = cur.do_move(m);
+            Undo u = do_move_counted(cur, m);
             (void)u;
         }
 
@@ -1401,9 +1444,9 @@ struct Searcher {
 
             if (g_params.enableCapSeePrune && !inCheck && isCap && !isPromo && ply > 0 && depth <= g_params.capSeeDepthMax &&
                 m != ttMove) {
-                int sQ = see_quick(pos, m);
+                int sQ = see_quick_main(pos, m);
                 if (sQ < g_params.capSeeQuickFullTrigger) {
-                    int sF = see_full(pos, m);
+                    int sF = see_full_main(pos, m);
                     if (sF < g_params.capSeeFullCut) {
                         ps.capSeePrune++;
                         continue;
@@ -1414,7 +1457,7 @@ struct Searcher {
                 }
             }
 
-            Undo u = pos.do_move(m);
+            Undo u = do_move_counted(pos, m);
 
             if (attacks::in_check(pos, us)) {
                 pos.undo_move(m, u);
@@ -1659,7 +1702,7 @@ struct Searcher {
                 const bool isCap = is_capture(pos, m) || (flags_of(m) & MF_EP);
                 const bool isPromo = (promo_of(m) != 0);
 
-                Undo u = pos.do_move(m);
+                Undo u = do_move_counted(pos, m);
 
                 rootLegalsSearched++;
 
@@ -1927,7 +1970,9 @@ struct Searcher {
                 std::cout << "info string stats_prune null_t=" << ss.nullTried << " null_fh=" << ss.nullCut
                           << " null_vf=" << ss.nullVerifyFail << " raz=" << ps.razorPrune << " rfp=" << ps.rfpPrune
                           << " rev_null=" << ss.proxyReversalAfterNull << " rev_rfp=" << ss.proxyReversalAfterRfp
-                          << " rev_raz=" << ss.proxyReversalAfterRazor << " tchk=" << ss.timeChecks << "\n";
+                          << " rev_raz=" << ss.proxyReversalAfterRazor << " tchk=" << ss.timeChecks
+                          << " leg=" << ss.legCalls << " legf=" << ss.legFail << " seem=" << ss.seeCallsMain
+                          << " seeq=" << ss.seeCallsQ << " mk=" << ss.makeCalls << "\n";
             }
         }
 

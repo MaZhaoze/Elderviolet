@@ -126,6 +126,11 @@ function Run-Case {
             null_vf = To-Num $p['null_vf']
             raz = To-Num $p['raz']
             rfp = To-Num $p['rfp']
+            leg = To-Num $p['leg']
+            legf = To-Num $p['legf']
+            seem = To-Num $p['seem']
+            seeq = To-Num $p['seeq']
+            mk = To-Num $p['mk']
         }
     }
 
@@ -140,7 +145,8 @@ function Run-Case {
         'lmr_red','lmr_re',
         'lmr_rk','lmr_rc','lmr_rh','lmr_rl',
         'lmr_rek','lmr_rec','lmr_reh','lmr_rel',
-        'null_t','null_fh','null_vf','raz','rfp'
+        'null_t','null_fh','null_vf','raz','rfp',
+        'leg','legf','seem','seeq','mk'
     )
     $sum = [ordered]@{ case = $Name; runs = $Runs; warmup = $Warmup }
     foreach ($k in $keys) {
