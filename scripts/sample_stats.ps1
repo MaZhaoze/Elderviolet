@@ -91,12 +91,14 @@ function Run-Case {
         $nodeLine = $out | Where-Object { $_ -match '^info string stats_node' } | Select-Object -Last 1
         $lmrLine = $out | Where-Object { $_ -match '^info string stats_lmr' } | Select-Object -Last 1
         $prLine = $out | Where-Object { $_ -match '^info string stats_prune' } | Select-Object -Last 1
+        $lgLine = $out | Where-Object { $_ -match '^info string stats_leg' } | Select-Object -Last 1
 
         $d = Parse-DepthLine $depthLine
         $r = Parse-KeyVals $rootLine
         $n = Parse-KeyVals $nodeLine
         $l = Parse-KeyVals $lmrLine
         $p = Parse-KeyVals $prLine
+        $g = Parse-KeyVals $lgLine
 
         $rows += [pscustomobject]@{
             Run = $i
@@ -132,6 +134,16 @@ function Run-Case {
             seeq = To-Num $p['seeq']
             seefs = To-Num $p['seefs']
             mk = To-Num $p['mk']
+            mkm = To-Num $p['mkm']
+            mkq = To-Num $p['mkq']
+            leg_failr = To-Num $g['failr']
+            leg_q = To-Num $g['q']
+            leg_c = To-Num $g['c']
+            leg_chk = To-Num $g['chk']
+            leg_ep = To-Num $g['ep']
+            leg_king = To-Num $g['king']
+            leg_sus = To-Num $g['sus']
+            leg_fast = To-Num $g['fast']
         }
     }
 
@@ -147,7 +159,8 @@ function Run-Case {
         'lmr_rk','lmr_rc','lmr_rh','lmr_rl',
         'lmr_rek','lmr_rec','lmr_reh','lmr_rel',
         'null_t','null_fh','null_vf','raz','rfp',
-        'leg','legf','seem','seeq','seefs','mk'
+        'leg','legf','seem','seeq','seefs','mk','mkm','mkq',
+        'leg_failr','leg_q','leg_c','leg_chk','leg_ep','leg_king','leg_sus','leg_fast'
     )
     $sum = [ordered]@{ case = $Name; runs = $Runs; warmup = $Warmup }
     foreach ($k in $keys) {

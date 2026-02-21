@@ -442,10 +442,28 @@ struct Searcher {
         uint64_t timeChecks = 0;
         uint64_t legCalls = 0;
         uint64_t legFail = 0;
+        uint64_t legQuiet = 0;
+        uint64_t legfQuiet = 0;
+        uint64_t legCapture = 0;
+        uint64_t legfCapture = 0;
+        uint64_t legCheck = 0;
+        uint64_t legfCheck = 0;
+        uint64_t legEp = 0;
+        uint64_t legfEp = 0;
+        uint64_t legKing = 0;
+        uint64_t legfKing = 0;
+        uint64_t legSuspin = 0;
+        uint64_t legfSuspin = 0;
+        uint64_t legNonsuspin = 0;
+        uint64_t legfNonsuspin = 0;
+        uint64_t legFast = 0;
+        uint64_t legSlow = 0;
         uint64_t seeCallsMain = 0;
         uint64_t seeCallsQ = 0;
         uint64_t seeFastSafe = 0;
         uint64_t makeCalls = 0;
+        uint64_t makeMain = 0;
+        uint64_t makeQ = 0;
         inline void clear() { *this = SearchStats{}; }
     } ss;
 
@@ -521,9 +539,14 @@ struct Searcher {
         }
     }
 
-    inline Undo do_move_counted(Position& pos, Move m) {
-        if (collect_stats())
+    inline Undo do_move_counted(Position& pos, Move m, bool inQ = false) {
+        if (collect_stats()) {
             ss.makeCalls++;
+            if (inQ)
+                ss.makeQ++;
+            else
+                ss.makeMain++;
+        }
         return pos.do_move(m);
     }
 
@@ -550,9 +573,9 @@ struct Searcher {
 
     // Strictly safe SEE fast-path: if captured square has no enemy attackers after move,
     // exchange cannot continue, so SEE is non-negative for non-promo captures.
-    inline bool see_fast_non_negative(Position& pos, Move m) {
+    inline bool see_fast_non_negative(Position& pos, Move m, bool inQ = false) {
         const int to = to_sq(m);
-        Undo u = do_move_counted(pos, m);
+        Undo u = do_move_counted(pos, m, inQ);
         const bool safe = !attacks::is_square_attacked(pos, to, pos.side);
         pos.undo_move(m, u);
         if (safe && collect_stats())
@@ -954,7 +977,7 @@ struct Searcher {
                             bigVictim = true;
 
                         if (bigVictim) {
-                            if (!see_fast_non_negative(pos, m)) {
+                            if (!see_fast_non_negative(pos, m, true)) {
                                 int sF = see_full_q(pos, m);
                                 if (sF < SEE_CUT)
                                     continue;
@@ -999,7 +1022,7 @@ struct Searcher {
         for (QNode& qn : list) {
             Move m = qn.m;
 
-            Undo u = do_move_counted(pos, m);
+            Undo u = do_move_counted(pos, m, true);
 
             if (attacks::in_check(pos, us)) {
                 pos.undo_move(m, u);
@@ -1085,29 +1108,109 @@ struct Searcher {
     }
 
     inline bool is_legal_move_here(Position& pos, Move m) {
-        if (collect_stats())
+        const bool cs = collect_stats();
+        if (cs)
             ss.legCalls++;
 
         if (!move_sane_basic(pos, m)) {
-            if (collect_stats())
+            if (cs) {
                 ss.legFail++;
+                ss.legSlow++;
+            }
             return false;
+        }
+
+        const Color us = pos.side;
+        const int from = from_sq(m);
+        const int to = to_sq(m);
+        const Piece mover = pos.board[from];
+        const bool isKing = (type_of(mover) == KING);
+        const bool isEp = ((flags_of(m) & MF_EP) != 0);
+        const bool isCap = isEp || (pos.board[to] != NO_PIECE);
+
+        bool inCheckNow = false;
+        bool susPin = false;
+        bool fastProxy = false;
+        if (cs) {
+            inCheckNow = attacks::in_check(pos, us);
+            const int ksq = pos.king_square(us);
+            if (ksq >= 0) {
+                const int df = std::abs(file_of(from) - file_of(ksq));
+                const int dr = std::abs(rank_of(from) - rank_of(ksq));
+                susPin = (df == 0 || dr == 0 || df == dr);
+            }
+            fastProxy = (!inCheckNow && !isKing && !isEp && !susPin);
+            if (fastProxy)
+                ss.legFast++;
+            else
+                ss.legSlow++;
+
+            if (isKing)
+                ss.legKing++;
+            if (susPin)
+                ss.legSuspin++;
+            else
+                ss.legNonsuspin++;
         }
 
         if (flags_of(m) & MF_CASTLE) {
             if (!movegen::legal_castle_path_ok(pos, m)) {
-                if (collect_stats())
+                if (cs) {
                     ss.legFail++;
+                    if (isKing)
+                        ss.legfKing++;
+                    if (susPin)
+                        ss.legfSuspin++;
+                    else
+                        ss.legfNonsuspin++;
+                    if (isEp)
+                        ss.legfEp++;
+                    else if (isCap)
+                        ss.legfCapture++;
+                    else
+                        ss.legfQuiet++;
+                }
                 return false;
             }
         }
 
-        const Color us = pos.side;
         Undo u = do_move_counted(pos, m);
         const bool ok = !attacks::in_check(pos, us);
+        bool givesCheck = false;
+        if (cs)
+            givesCheck = attacks::in_check(pos, pos.side);
         pos.undo_move(m, u);
-        if (!ok && collect_stats())
-            ss.legFail++;
+
+        if (cs) {
+            if (isEp)
+                ss.legEp++;
+            else if (givesCheck)
+                ss.legCheck++;
+            else if (isCap)
+                ss.legCapture++;
+            else
+                ss.legQuiet++;
+
+            if (!ok) {
+                ss.legFail++;
+                if (isKing)
+                    ss.legfKing++;
+                if (susPin)
+                    ss.legfSuspin++;
+                else
+                    ss.legfNonsuspin++;
+
+                if (isEp)
+                    ss.legfEp++;
+                else if (givesCheck)
+                    ss.legfCheck++;
+                else if (isCap)
+                    ss.legfCapture++;
+                else
+                    ss.legfQuiet++;
+            }
+        }
+
         return ok;
     }
 
@@ -1461,7 +1564,7 @@ struct Searcher {
                 m != ttMove) {
                 int sQ = see_quick_main(pos, m);
                 if (sQ < g_params.capSeeQuickFullTrigger) {
-                    if (!see_fast_non_negative(pos, m)) {
+                    if (!see_fast_non_negative(pos, m, false)) {
                         int sF = see_full_main(pos, m);
                         if (sF < g_params.capSeeFullCut) {
                             ps.capSeePrune++;
@@ -1990,7 +2093,14 @@ struct Searcher {
                           << " rev_raz=" << ss.proxyReversalAfterRazor << " tchk=" << ss.timeChecks
                           << " leg=" << ss.legCalls << " legf=" << ss.legFail << " seem=" << ss.seeCallsMain
                           << " seeq=" << ss.seeCallsQ << " seefs=" << ss.seeFastSafe << " mk=" << ss.makeCalls
-                          << "\n";
+                          << " mkm=" << ss.makeMain << " mkq=" << ss.makeQ << "\n";
+
+                const uint64_t legDen = ss.legCalls ? ss.legCalls : 1;
+                std::cout << "info string stats_leg failr=" << pct(ss.legFail, legDen)
+                          << " q=" << pct(ss.legQuiet, legDen) << " c=" << pct(ss.legCapture, legDen)
+                          << " chk=" << pct(ss.legCheck, legDen) << " ep=" << pct(ss.legEp, legDen)
+                          << " king=" << pct(ss.legKing, legDen) << " sus=" << pct(ss.legSuspin, legDen)
+                          << " fast=" << pct(ss.legFast, legDen) << "\n";
             }
         }
 
