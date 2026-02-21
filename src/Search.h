@@ -346,7 +346,12 @@ struct SharedTT {
         TTEntry* e = tt.probe(key);
         if (!e || e->key != key)
             return false;
-        out = *e;
+        // Read only hot fields needed by search, avoid whole-struct copy in hot path.
+        out.key = e->key;
+        out.best = e->best;
+        out.score = e->score;
+        out.depth = e->depth;
+        out.flag = e->flag;
         return true;
     }
 
@@ -361,7 +366,7 @@ struct SharedTT {
             e->key = key;
             e->best = best;
             e->score = score;
-            e->depth = depth;
+            e->depth = (depth > 127 ? 127 : (depth < -128 ? -128 : depth));
             e->flag = flag;
         }
     }
