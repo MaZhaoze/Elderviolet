@@ -458,6 +458,8 @@ struct Searcher {
         uint64_t legfNonsuspin = 0;
         uint64_t legFast = 0;
         uint64_t legSlow = 0;
+        uint64_t legFast2 = 0;
+        uint64_t pinCalc = 0;
         uint64_t seeCallsMain = 0;
         uint64_t seeCallsQ = 0;
         uint64_t seeFastSafe = 0;
@@ -571,6 +573,65 @@ struct Searcher {
         return see_full(pos, m);
     }
 
+    inline uint64_t compute_pinned_mask_for_side(const Position& pos, Color us) {
+        const int ksq = pos.king_square(us);
+        if ((unsigned)ksq >= 64u)
+            return 0ULL;
+
+        uint64_t pinned = 0ULL;
+        const int kf = file_of(ksq);
+        const int kr = rank_of(ksq);
+        const Color them = flip_color(us);
+
+        auto scan = [&](int df, int dr, bool diag) {
+            int ff = kf + df;
+            int rr = kr + dr;
+            int ownSq = -1;
+            while ((unsigned)ff < 8u && (unsigned)rr < 8u) {
+                int sq = make_sq(ff, rr);
+                Piece p = pos.board[sq];
+                if (p != NO_PIECE) {
+                    if (color_of(p) == us) {
+                        if (ownSq == -1)
+                            ownSq = sq;
+                        else
+                            break; // second own blocker -> no pin on this ray
+                    } else {
+                        PieceType pt = type_of(p);
+                        bool slider = diag ? (pt == BISHOP || pt == QUEEN) : (pt == ROOK || pt == QUEEN);
+                        if (slider && ownSq != -1 && color_of(p) == them)
+                            pinned |= (1ULL << ownSq);
+                        break;
+                    }
+                }
+                ff += df;
+                rr += dr;
+            }
+        };
+
+        scan(+1, 0, false);
+        scan(-1, 0, false);
+        scan(0, +1, false);
+        scan(0, -1, false);
+        scan(+1, +1, true);
+        scan(+1, -1, true);
+        scan(-1, +1, true);
+        scan(-1, -1, true);
+        return pinned;
+    }
+
+    inline uint64_t pinned_mask_for_ply(const Position& pos, Color us, int plyCtx) {
+        if ((unsigned)plyCtx >= 256u)
+            return compute_pinned_mask_for_side(pos, us);
+        if (!pinnedMaskValid[plyCtx]) {
+            pinnedMaskCache[plyCtx] = compute_pinned_mask_for_side(pos, us);
+            pinnedMaskValid[plyCtx] = true;
+            if (collect_stats())
+                ss.pinCalc++;
+        }
+        return pinnedMaskCache[plyCtx];
+    }
+
     // Strictly safe SEE fast-path: if captured square has no enemy attackers after move,
     // exchange cannot continue, so SEE is non-negative for non-promo captures.
     inline bool see_fast_non_negative(Position& pos, Move m, bool inQ = false) {
@@ -605,6 +666,11 @@ struct Searcher {
     uint64_t keyStack[256]{};
     int keyPly = 0;
     int staticEvalStack[256]{};
+    uint64_t pinnedMaskCache[256]{};
+    bool pinnedMaskValid[256]{};
+    int kingSqCache[256]{};
+    bool inCheckCache[256]{};
+    bool inCheckCacheValid[256]{};
 
     static constexpr int MAX_PLY = 128;
 
@@ -904,6 +970,11 @@ struct Searcher {
 
         const Color us = pos.side;
         const bool inCheck = attacks::in_check(pos, us);
+        if ((unsigned)ply < 256u) {
+            pinnedMaskValid[ply] = false;
+            inCheckCache[ply] = inCheck;
+            inCheckCacheValid[ply] = true;
+        }
 
         if (ply >= 64)
             return eval::evaluate(pos);
@@ -1107,7 +1178,7 @@ struct Searcher {
         return false;
     }
 
-    inline bool is_legal_move_here(Position& pos, Move m) {
+    inline bool is_legal_move_here(Position& pos, Move m, int plyCtx = -1) {
         const bool cs = collect_stats();
         if (cs)
             ss.legCalls++;
@@ -1126,20 +1197,30 @@ struct Searcher {
         const Piece mover = pos.board[from];
         const bool isKing = (type_of(mover) == KING);
         const bool isEp = ((flags_of(m) & MF_EP) != 0);
+        const bool isCastle = ((flags_of(m) & MF_CASTLE) != 0);
         const bool isCap = isEp || (pos.board[to] != NO_PIECE);
 
         bool inCheckNow = false;
+        if ((unsigned)plyCtx < 256u && inCheckCacheValid[plyCtx])
+            inCheckNow = inCheckCache[plyCtx];
+        else {
+            inCheckNow = attacks::in_check(pos, us);
+            if ((unsigned)plyCtx < 256u) {
+                inCheckCache[plyCtx] = inCheckNow;
+                inCheckCacheValid[plyCtx] = true;
+            }
+        }
+
         bool susPin = false;
         bool fastProxy = false;
         if (cs) {
-            inCheckNow = attacks::in_check(pos, us);
             const int ksq = pos.king_square(us);
             if (ksq >= 0) {
                 const int df = std::abs(file_of(from) - file_of(ksq));
                 const int dr = std::abs(rank_of(from) - rank_of(ksq));
                 susPin = (df == 0 || dr == 0 || df == dr);
             }
-            fastProxy = (!inCheckNow && !isKing && !isEp && !susPin);
+            fastProxy = (!inCheckNow && !isKing && !isEp && !isCastle && !susPin);
             if (fastProxy)
                 ss.legFast++;
             else
@@ -1153,7 +1234,7 @@ struct Searcher {
                 ss.legNonsuspin++;
         }
 
-        if (flags_of(m) & MF_CASTLE) {
+        if (isCastle) {
             if (!movegen::legal_castle_path_ok(pos, m)) {
                 if (cs) {
                     ss.legFail++;
@@ -1171,6 +1252,20 @@ struct Searcher {
                         ss.legfQuiet++;
                 }
                 return false;
+            }
+        }
+
+        if (!inCheckNow && !isKing && !isEp && !isCastle) {
+            const uint64_t pinned = pinned_mask_for_ply(pos, us, plyCtx);
+            if ((pinned & (1ULL << from)) == 0ULL) {
+                if (cs) {
+                    ss.legFast2++;
+                    if (isCap)
+                        ss.legCapture++;
+                    else
+                        ss.legQuiet++;
+                }
+                return true;
             }
         }
 
@@ -1324,6 +1419,11 @@ struct Searcher {
 
         const Color us = pos.side;
         const bool inCheck = attacks::in_check(pos, us);
+        if ((unsigned)ply < 256u) {
+            pinnedMaskValid[ply] = false;
+            inCheckCache[ply] = inCheck;
+            inCheckCacheValid[ply] = true;
+        }
 
         alpha = std::max(alpha, -MATE + ply);
         beta = std::min(beta, MATE - ply - 1);
@@ -1366,7 +1466,7 @@ struct Searcher {
                 if (te.flag == TT_EXACT && allowTTCut) {
                     if (collect_stats())
                         ss.ttCut++;
-                    if (ttMove && is_legal_move_here(pos, ttMove)) {
+                    if (ttMove && is_legal_move_here(pos, ttMove, ply)) {
                         pv.m[0] = ttMove;
                         pv.len = 1;
                     }
@@ -1376,7 +1476,7 @@ struct Searcher {
                 if (te.flag == TT_ALPHA && allowTTCut && ttScore <= alpha) {
                     if (collect_stats())
                         ss.ttCut++;
-                    if (pv.len == 0 && ttMove && is_legal_move_here(pos, ttMove)) {
+                    if (pv.len == 0 && ttMove && is_legal_move_here(pos, ttMove, ply)) {
                         pv.m[0] = ttMove;
                         pv.len = 1;
                     }
@@ -1386,7 +1486,7 @@ struct Searcher {
                 if (te.flag == TT_BETA && allowTTCut && ttScore >= beta) {
                     if (collect_stats())
                         ss.ttCut++;
-                    if (pv.len == 0 && ttMove && is_legal_move_here(pos, ttMove)) {
+                    if (pv.len == 0 && ttMove && is_legal_move_here(pos, ttMove, ply)) {
                         pv.m[0] = ttMove;
                         pv.len = 1;
                     }
@@ -1732,8 +1832,11 @@ struct Searcher {
     Result think(Position& pos, const Limits& lim, bool emitInfo) {
         keyPly = 0;
         keyStack[keyPly++] = pos.zobKey;
-        for (int i = 0; i < 256; i++)
+        for (int i = 0; i < 256; i++) {
             staticEvalStack[i] = -INF;
+            pinnedMaskValid[i] = false;
+            inCheckCacheValid[i] = false;
+        }
 
         Result res{};
         nodes = 0;
@@ -1964,7 +2067,7 @@ struct Searcher {
             Move rootTTMove = 0;
             {
                 TTEntry rte{};
-                if (stt->probe_copy(pos.zobKey, rte) && rte.best && is_legal_move_here(pos, rte.best))
+                if (stt->probe_copy(pos.zobKey, rte) && rte.best && is_legal_move_here(pos, rte.best, 0))
                     rootTTMove = rte.best;
             }
 
@@ -2093,14 +2196,14 @@ struct Searcher {
                           << " rev_raz=" << ss.proxyReversalAfterRazor << " tchk=" << ss.timeChecks
                           << " leg=" << ss.legCalls << " legf=" << ss.legFail << " seem=" << ss.seeCallsMain
                           << " seeq=" << ss.seeCallsQ << " seefs=" << ss.seeFastSafe << " mk=" << ss.makeCalls
-                          << " mkm=" << ss.makeMain << " mkq=" << ss.makeQ << "\n";
+                          << " mkm=" << ss.makeMain << " mkq=" << ss.makeQ << " pinc=" << ss.pinCalc << "\n";
 
                 const uint64_t legDen = ss.legCalls ? ss.legCalls : 1;
                 std::cout << "info string stats_leg failr=" << pct(ss.legFail, legDen)
                           << " q=" << pct(ss.legQuiet, legDen) << " c=" << pct(ss.legCapture, legDen)
                           << " chk=" << pct(ss.legCheck, legDen) << " ep=" << pct(ss.legEp, legDen)
                           << " king=" << pct(ss.legKing, legDen) << " sus=" << pct(ss.legSuspin, legDen)
-                          << " fast=" << pct(ss.legFast, legDen) << "\n";
+                          << " fast=" << pct(ss.legFast, legDen) << " fast2=" << pct(ss.legFast2, legDen) << "\n";
             }
         }
 

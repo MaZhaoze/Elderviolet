@@ -136,6 +136,7 @@ function Run-Case {
             mk = To-Num $p['mk']
             mkm = To-Num $p['mkm']
             mkq = To-Num $p['mkq']
+            pinc = To-Num $p['pinc']
             leg_failr = To-Num $g['failr']
             leg_q = To-Num $g['q']
             leg_c = To-Num $g['c']
@@ -144,6 +145,7 @@ function Run-Case {
             leg_king = To-Num $g['king']
             leg_sus = To-Num $g['sus']
             leg_fast = To-Num $g['fast']
+            leg_fast2 = To-Num $g['fast2']
         }
     }
 
@@ -159,8 +161,8 @@ function Run-Case {
         'lmr_rk','lmr_rc','lmr_rh','lmr_rl',
         'lmr_rek','lmr_rec','lmr_reh','lmr_rel',
         'null_t','null_fh','null_vf','raz','rfp',
-        'leg','legf','seem','seeq','seefs','mk','mkm','mkq',
-        'leg_failr','leg_q','leg_c','leg_chk','leg_ep','leg_king','leg_sus','leg_fast'
+        'leg','legf','seem','seeq','seefs','mk','mkm','mkq','pinc',
+        'leg_failr','leg_q','leg_c','leg_chk','leg_ep','leg_king','leg_sus','leg_fast','leg_fast2'
     )
     $sum = [ordered]@{ case = $Name; runs = $Runs; warmup = $Warmup }
     foreach ($k in $keys) {
