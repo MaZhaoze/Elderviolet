@@ -166,6 +166,7 @@ struct SearchParams {
     int lmrDepthForMove3 = 7;
     int lmrHistoryLow = 2000;
     int lmrHistoryHigh = 60000;
+    int lmrBucketHigh = 6000; // stats-only bucket threshold on combined quiet score
 };
 
 inline SearchParams g_params{};
@@ -649,7 +650,7 @@ struct Searcher {
         int ci = color_index(us);
         int sc = history[ci][from][to] / 2;
         if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u)
-            sc += contHist[ci][prevFrom][prevTo][from][to] / 4;
+            sc += contHist[ci][prevFrom][prevTo][from][to] / 2;
         return sc;
     }
 
@@ -661,7 +662,7 @@ struct Searcher {
             return 1;
         if (recapture || givesCheck)
             return 2;
-        if (qScore >= g_params.lmrHistoryLow)
+        if (qScore >= g_params.lmrBucketHigh)
             return 2;
         return 3;
     }
