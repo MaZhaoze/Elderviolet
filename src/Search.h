@@ -444,6 +444,7 @@ struct Searcher {
         uint64_t legFail = 0;
         uint64_t seeCallsMain = 0;
         uint64_t seeCallsQ = 0;
+        uint64_t seeFastSafe = 0;
         uint64_t makeCalls = 0;
         inline void clear() { *this = SearchStats{}; }
     } ss;
@@ -545,6 +546,18 @@ struct Searcher {
         if (collect_stats())
             ss.seeCallsQ++;
         return see_full(pos, m);
+    }
+
+    // Strictly safe SEE fast-path: if captured square has no enemy attackers after move,
+    // exchange cannot continue, so SEE is non-negative for non-promo captures.
+    inline bool see_fast_non_negative(Position& pos, Move m) {
+        const int to = to_sq(m);
+        Undo u = do_move_counted(pos, m);
+        const bool safe = !attacks::is_square_attacked(pos, to, pos.side);
+        pos.undo_move(m, u);
+        if (safe && collect_stats())
+            ss.seeFastSafe++;
+        return safe;
     }
 
     struct PVLine {
@@ -941,9 +954,11 @@ struct Searcher {
                             bigVictim = true;
 
                         if (bigVictim) {
-                            int sF = see_full_q(pos, m);
-                            if (sF < SEE_CUT)
-                                continue;
+                            if (!see_fast_non_negative(pos, m)) {
+                                int sF = see_full_q(pos, m);
+                                if (sF < SEE_CUT)
+                                    continue;
+                            }
                         } else {
                             if (sQ < SEE_CUT)
                                 continue;
@@ -1446,10 +1461,12 @@ struct Searcher {
                 m != ttMove) {
                 int sQ = see_quick_main(pos, m);
                 if (sQ < g_params.capSeeQuickFullTrigger) {
-                    int sF = see_full_main(pos, m);
-                    if (sF < g_params.capSeeFullCut) {
-                        ps.capSeePrune++;
-                        continue;
+                    if (!see_fast_non_negative(pos, m)) {
+                        int sF = see_full_main(pos, m);
+                        if (sF < g_params.capSeeFullCut) {
+                            ps.capSeePrune++;
+                            continue;
+                        }
                     }
                 } else if (sQ < g_params.capSeeQuickCut) {
                     ps.capSeePrune++;
@@ -1972,7 +1989,8 @@ struct Searcher {
                           << " rev_null=" << ss.proxyReversalAfterNull << " rev_rfp=" << ss.proxyReversalAfterRfp
                           << " rev_raz=" << ss.proxyReversalAfterRazor << " tchk=" << ss.timeChecks
                           << " leg=" << ss.legCalls << " legf=" << ss.legFail << " seem=" << ss.seeCallsMain
-                          << " seeq=" << ss.seeCallsQ << " mk=" << ss.makeCalls << "\n";
+                          << " seeq=" << ss.seeCallsQ << " seefs=" << ss.seeFastSafe << " mk=" << ss.makeCalls
+                          << "\n";
             }
         }
 
