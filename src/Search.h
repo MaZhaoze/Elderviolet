@@ -434,6 +434,7 @@ struct Searcher {
         uint64_t proxyReversalAfterNull = 0;
         uint64_t proxyReversalAfterRfp = 0;
         uint64_t proxyReversalAfterRazor = 0;
+        uint64_t timeChecks = 0;
         inline void clear() { *this = SearchStats{}; }
     } ss;
 
@@ -455,6 +456,9 @@ struct Searcher {
     // Batch node counting to reduce atomic contention.
     uint64_t nodes_batch = 0;
     static constexpr uint64_t NODE_BATCH = 4096; // power of two
+    uint32_t time_check_tick = 0;
+    static constexpr uint32_t TIME_CHECK_MASK_NODE = 4095; // every 4096 probes
+    static constexpr uint32_t TIME_CHECK_MASK_ROOT = 255;  // every 256 probes
 
     inline void batch_time_check_soft() {
         int64_t end = g_endTimeMs.load(std::memory_order_relaxed);
@@ -469,6 +473,28 @@ struct Searcher {
             g_nodes_total.fetch_add(nodes_batch, std::memory_order_relaxed);
             nodes_batch = 0;
         }
+    }
+
+    // Cheap stop/time probe: always read stop flag, but read clock sparsely.
+    inline bool stop_or_time_up(bool rootNode) {
+        if (g_stop.load(std::memory_order_relaxed))
+            return true;
+        int64_t end = g_endTimeMs.load(std::memory_order_relaxed);
+        if (end == 0)
+            return false;
+
+        const uint32_t mask = rootNode ? TIME_CHECK_MASK_ROOT : TIME_CHECK_MASK_NODE;
+        if ((time_check_tick++ & mask) != 0)
+            return false;
+
+        if (collect_stats())
+            ss.timeChecks++;
+
+        if (now_ms() >= end) {
+            g_stop.store(true, std::memory_order_relaxed);
+            return true;
+        }
+        return false;
     }
 
     // Count a node and periodically publish to the global counter.
@@ -1080,7 +1106,7 @@ struct Searcher {
             out.m[out.len++] = m;
             prev = m;
 
-            if (time_up()) [[unlikely]]
+            if (stop_or_time_up(false)) [[unlikely]]
                 break;
         }
 
@@ -1121,7 +1147,7 @@ struct Searcher {
         pv.len = 0;
         const bool pvNode = (beta - alpha > 1);
 
-        if (time_up()) [[unlikely]]
+        if (stop_or_time_up(false)) [[unlikely]]
             return alpha;
 
         add_node();
@@ -1271,7 +1297,7 @@ struct Searcher {
 
                     undo_null_move(pos, nu);
 
-                    if (time_up()) [[unlikely]]
+                    if (stop_or_time_up(false)) [[unlikely]]
                         return alpha;
                     if (score >= beta) {
                         if (collect_stats())
@@ -1338,7 +1364,7 @@ struct Searcher {
         }
 
         for (int kk = 0; kk < (int)order.size(); kk++) {
-            if (time_up()) [[unlikely]]
+            if (stop_or_time_up(false)) [[unlikely]]
                 return alpha;
 
             Move m = moves[order[kk]];
@@ -1471,7 +1497,7 @@ struct Searcher {
 
             pos.undo_move(m, u);
 
-            if (time_up()) [[unlikely]]
+            if (stop_or_time_up(false)) [[unlikely]]
                 return alpha;
 
             if (score > bestScore) {
@@ -1547,6 +1573,7 @@ struct Searcher {
         Result res{};
         nodes = 0;
         nodes_batch = 0;
+        time_check_tick = 0;
         selDepth = 0;
         ps.clear();
         ss.clear();
@@ -1620,7 +1647,7 @@ struct Searcher {
             int rootLegalsSearched = 0;
 
             for (int i = 0; i < (int)rootMoves.size(); i++) {
-                if (time_up()) [[unlikely]] {
+                if (stop_or_time_up(true)) [[unlikely]] {
                     outOk = false;
                     break;
                 }
@@ -1685,7 +1712,7 @@ struct Searcher {
 
                 pos.undo_move(m, u);
 
-                if (time_up()) [[unlikely]] {
+                if (stop_or_time_up(true)) [[unlikely]] {
                     outOk = false;
                     break;
                 }
@@ -1732,7 +1759,7 @@ struct Searcher {
         bool prevHadRazor = false;
 
         for (int d = 1; d <= maxDepth; d++) {
-            if (time_up()) [[unlikely]]
+            if (stop_or_time_up(true)) [[unlikely]]
                 break;
 
             if (bestMove) {
@@ -1898,7 +1925,7 @@ struct Searcher {
                 std::cout << "info string stats_prune null_t=" << ss.nullTried << " null_fh=" << ss.nullCut
                           << " null_vf=" << ss.nullVerifyFail << " raz=" << ps.razorPrune << " rfp=" << ps.rfpPrune
                           << " rev_null=" << ss.proxyReversalAfterNull << " rev_rfp=" << ss.proxyReversalAfterRfp
-                          << " rev_raz=" << ss.proxyReversalAfterRazor << "\n";
+                          << " rev_raz=" << ss.proxyReversalAfterRazor << " tchk=" << ss.timeChecks << "\n";
             }
         }
 
