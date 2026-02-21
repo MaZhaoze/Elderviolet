@@ -113,6 +113,14 @@ function Run-Case {
             avgm_all = To-Num $n['avgm_all']
             lmr_red = To-Num $l['red']
             lmr_re = To-Num $l['re']
+            lmr_rk = To-Num $l['rk']
+            lmr_rc = To-Num $l['rc']
+            lmr_rh = To-Num $l['rh']
+            lmr_rl = To-Num $l['rl']
+            lmr_rek = To-Num $l['rek']
+            lmr_rec = To-Num $l['rec']
+            lmr_reh = To-Num $l['reh']
+            lmr_rel = To-Num $l['rel']
             null_t = To-Num $p['null_t']
             null_fh = To-Num $p['null_fh']
             null_vf = To-Num $p['null_vf']
@@ -124,7 +132,16 @@ function Run-Case {
     $start = [Math]::Max(0, $Warmup)
     $slice = if ($rows.Count -gt $start) { $rows[$start..($rows.Count - 1)] } else { $rows }
 
-    $keys = @('depth','nodes','nps','root_fh1','root_re','tt_hit','tt_cut','ttm_first','avgm_pv','avgm_cut','avgm_all','lmr_red','lmr_re','null_t','null_fh','null_vf','raz','rfp')
+    $keys = @(
+        'depth','nodes','nps',
+        'root_fh1','root_re',
+        'tt_hit','tt_cut','ttm_first',
+        'avgm_pv','avgm_cut','avgm_all',
+        'lmr_red','lmr_re',
+        'lmr_rk','lmr_rc','lmr_rh','lmr_rl',
+        'lmr_rek','lmr_rec','lmr_reh','lmr_rel',
+        'null_t','null_fh','null_vf','raz','rfp'
+    )
     $sum = [ordered]@{ case = $Name; runs = $Runs; warmup = $Warmup }
     foreach ($k in $keys) {
         $arr = @($slice | ForEach-Object { $_.$k } | Where-Object { $null -ne $_ })

@@ -635,11 +635,33 @@ struct Searcher {
     }
 
     inline int lmr_bucket(bool isKiller, bool isCounter, int quietScore) const {
+        // Legacy bucket helper (kept for compatibility in non-stats callsites).
         if (isKiller)
             return 0;
         if (isCounter)
             return 1;
         if (quietScore >= g_params.lmrHistoryLow)
+            return 2;
+        return 3;
+    }
+
+    inline int quiet_bucket_score(Color us, int from, int to, int prevFrom, int prevTo) const {
+        int ci = color_index(us);
+        int sc = history[ci][from][to] / 2;
+        if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u)
+            sc += contHist[ci][prevFrom][prevTo][from][to] / 4;
+        return sc;
+    }
+
+    inline int lmr_bucket_refined(bool isKiller, bool isCounter, bool recapture, bool givesCheck, int qScore) const {
+        // 0 killer, 1 counter, 2 quiet-high/protected, 3 quiet-low
+        if (isKiller)
+            return 0;
+        if (isCounter)
+            return 1;
+        if (recapture || givesCheck)
+            return 2;
+        if (qScore >= g_params.lmrHistoryLow)
             return 2;
         return 3;
     }
@@ -1403,12 +1425,13 @@ struct Searcher {
                         ps.lmrApplied++;
                         if (collect_stats()) {
                             ss.lmrTried++;
-                            int ci = color_index(us);
-                            int qh = history[ci][curFrom][curTo] / 2;
                             bool isK = (m == killer[0][std::min(ply, 127)] || m == killer[1][std::min(ply, 127)]);
                             bool isC = ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u &&
                                         m == countermove[prevFrom][prevTo]);
-                            ss.lmrReducedByBucket[lmr_bucket(isK, isC, qh)]++;
+                            const bool recapture = (lastWasCap && lastTo >= 0 && curTo == lastTo);
+                            const bool givesCheck = attacks::in_check(pos, pos.side);
+                            const int qh = quiet_bucket_score(us, curFrom, curTo, prevFrom, prevTo);
+                            ss.lmrReducedByBucket[lmr_bucket_refined(isK, isC, recapture, givesCheck, qh)]++;
                         }
                     }
                 }
@@ -1423,12 +1446,13 @@ struct Searcher {
                 if (score > alpha && reduction > 0 && rd != depth - 1) {
                     if (collect_stats()) {
                         ss.lmrResearched++;
-                        int ci = color_index(us);
-                        int qh = history[ci][curFrom][curTo] / 2;
                         bool isK = (m == killer[0][std::min(ply, 127)] || m == killer[1][std::min(ply, 127)]);
                         bool isC = ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u &&
                                     m == countermove[prevFrom][prevTo]);
-                        ss.lmrResearchedByBucket[lmr_bucket(isK, isC, qh)]++;
+                        const bool recapture = (lastWasCap && lastTo >= 0 && curTo == lastTo);
+                        const bool givesCheck = attacks::in_check(pos, pos.side);
+                        const int qh = quiet_bucket_score(us, curFrom, curTo, prevFrom, prevTo);
+                        ss.lmrResearchedByBucket[lmr_bucket_refined(isK, isC, recapture, givesCheck, qh)]++;
                     }
                     PVLine childPV2;
                     score = -negamax(pos, depth - 1, -alpha - 1, -alpha, ply + 1, curFrom, curTo, nextLastTo,
