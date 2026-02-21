@@ -466,11 +466,10 @@ struct Searcher {
 
         sc += history[ci][from][to] / 2;
 
-        if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u) {
-            if (m == countermove[prevFrom][prevTo])
-                sc += 18000000;
-            sc += contHist[ci][prevFrom][prevTo][from][to];
-        }
+            if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u) {
+                if (m == countermove[prevFrom][prevTo])
+                    sc += 18000000;
+            }
 
         if (type_of(mover) == BISHOP)
             sc += 2000;
@@ -540,8 +539,6 @@ struct Searcher {
         const bool shallow = (ply <= 1);
 
         for (Move m : moves) {
-            if (!move_sane_basic(pos, m))
-                continue;
             if (flags_of(m) & MF_CASTLE)
                 continue;
 
@@ -846,10 +843,10 @@ struct Searcher {
                 int ttScore = from_tt_score((int)te.score, ply);
 
                 if (te.flag == TT_EXACT) {
-                    PVLine tmp;
-                    const int maxFollow = std::min(127, std::max(1, depth));
-                    follow_tt_pv(pos, maxFollow, tmp);
-                    pv = tmp;
+                    if (ttMove && is_legal_move_here(pos, ttMove)) {
+                        pv.m[0] = ttMove;
+                        pv.len = 1;
+                    }
                     return ttScore;
                 }
 
@@ -917,7 +914,7 @@ struct Searcher {
         auto& moves = plyMoves[ply];
         auto& scores = plyScores[ply];
 
-        movegen::generate_legal(pos, moves);
+        movegen::generate_pseudo_legal(pos, moves);
 
         if (moves.empty()) {
             if (inCheck)
@@ -966,9 +963,6 @@ struct Searcher {
                 return alpha;
 
             Move m = moves[order[kk]];
-            if (!move_sane_basic(pos, m))
-                continue;
-
             const int curFrom = from_sq(m);
             const int curTo = to_sq(m);
 
@@ -1001,6 +995,11 @@ struct Searcher {
 
             Undo u = pos.do_move(m);
 
+            if (attacks::in_check(pos, us)) {
+                pos.undo_move(m, u);
+                continue;
+            }
+
             legalMovesSearched++;
             if (isQuiet)
                 quietMovesSearched++;
@@ -1028,9 +1027,6 @@ struct Searcher {
 
                     int ci = color_index(us);
                     int h = history[ci][curFrom][curTo] / 2;
-                    if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u)
-                        h += contHist[ci][prevFrom][prevTo][curFrom][curTo];
-
                     if (h < 2000)
                         reduction++;
                     if (h > 60000)
@@ -1094,15 +1090,14 @@ struct Searcher {
 
                     if ((unsigned)prevFrom < 64u && (unsigned)prevTo < 64u) {
                         countermove[prevFrom][prevTo] = m;
-                        int& ch = contHist[ci][prevFrom][prevTo][curFrom][curTo];
-                        ch += depth * depth * 24;
-                        if (ch > 400000)
-                            ch = 400000;
                     }
                 }
                 break;
             }
         }
+
+        if (legalMovesSearched == 0)
+            return inCheck ? (-MATE + ply) : 0;
 
         pv = bestPV;
 
