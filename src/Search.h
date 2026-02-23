@@ -17,7 +17,7 @@
 #include "ZobristTables.h"
 #include "MoveGeneration.h"
 #include "Attack.h"
-#include "eval/eval.h"
+#include "Evaluation.h"
 #include "search/SearchConfig.h"
 #include "search/SearchMoveFormat.h"
 #include "search/SearchStats.h"
@@ -631,7 +631,6 @@ inline void clear_tt() {
 }
 
 } // namespace search
-
 
 
 

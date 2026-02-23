@@ -94,6 +94,9 @@ static inline void uci_id(const Engine&) {
     std::cout << "option name SyzygyPath type string default <empty>\n";
     std::cout << "option name Skill Level type spin default 20 min 0 max 20\n";
     std::cout << "option name SearchStats type check default false\n";
+    std::cout << "option name UseBook type check default true\n";
+    std::cout << "option name BookDepth type spin default 16 min 0 max 128\n";
+    std::cout << "option name BookFile type string default GMopenings.bin\n";
     std::cout << "uciok\n";
     std::cout.flush();
 }
@@ -185,6 +188,24 @@ static inline void cmd_setoption(const std::vector<std::string>& tokens, Engine&
     if (lname == "searchstats") {
         bool b = to_bool_safe(value, false);
         engine.set_search_stats(b);
+        return;
+    }
+
+    if (lname == "usebook") {
+        bool b = to_bool_safe(value, true);
+        engine.set_use_book(b);
+        return;
+    }
+
+    if (lname == "bookdepth") {
+        int ply = to_int_safe(value, 16);
+        ply = clampi(ply, 0, 128);
+        engine.set_book_depth(ply);
+        return;
+    }
+
+    if (lname == "bookfile") {
+        engine.set_book_file(value);
         return;
     }
 }

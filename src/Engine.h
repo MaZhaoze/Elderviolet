@@ -6,15 +6,20 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <filesystem>
 
 #include "types.h"
 #include "Position.h"
 #include "MoveGeneration.h"
 #include "Search.h"
+#include "Book.h"
 
 class Engine {
   public:
-    Engine() { pos.set_startpos(); }
+    Engine() {
+        pos.set_startpos();
+        init_default_book_file();
+    }
 
     ~Engine() { stop(); }
 
@@ -42,6 +47,12 @@ class Engine {
     void set_skill_level(int lv) { skill_level_ = std::max(0, std::min(20, lv)); }
     int skill_level() const { return skill_level_; }
     void set_search_stats(bool on) { search::set_collect_stats(on); }
+    void set_use_book(bool on) { use_book_ = on; }
+    void set_book_depth(int ply) { book_max_ply_ = std::max(0, std::min(128, ply)); }
+    void set_book_file(const std::string& path) {
+        book_file_ = path;
+        book::set_book_file(path);
+    }
 
     // Position management.
     void set_startpos() { pos.set_startpos(); }
@@ -92,6 +103,17 @@ class Engine {
            bool ponder) {
         // Stop any existing background search to avoid re-entrancy.
         stop();
+
+        if (!ponder && use_book_ && book_max_ply_ > 0) {
+            const book::ProbeResult br = book::probe(pos, book_max_ply_);
+            if (br.bestMove) {
+                if (br.pv.size() >= 2)
+                    last_ponder_move_.store((int)br.pv[1], std::memory_order_relaxed);
+                else
+                    last_ponder_move_.store(0, std::memory_order_relaxed);
+                return (int)br.bestMove;
+            }
+        }
 
         search::Limits lim{};
         lim.depth = 0;
@@ -206,6 +228,22 @@ class Engine {
     }
 
   private:
+    void init_default_book_file() {
+        namespace fs = std::filesystem;
+        const fs::path p1 = fs::path("GMopenings.bin");
+        const fs::path p2 = fs::path("src") / "GMopenings.bin";
+
+        if (fs::exists(p1) && book::set_book_file(p1.string())) {
+            book_file_ = p1.string();
+            return;
+        }
+        if (fs::exists(p2) && book::set_book_file(p2.string())) {
+            book_file_ = p2.string();
+            return;
+        }
+    }
+
+  private:
     // Time allocation for clock mode only (ms).
     static inline int compute_think_ms(int mytime_ms, int myinc_ms, int movestogo, int move_overhead_ms) {
         if (mytime_ms <= 0)
@@ -265,6 +303,9 @@ class Engine {
     int move_overhead_ms_ = 10;
     std::string syzygy_path_;
     int skill_level_ = 20;
+    bool use_book_ = true;
+    int book_max_ply_ = 16;
+    std::string book_file_;
 
     // ponder/search state
     std::atomic<bool> searching_{false};
